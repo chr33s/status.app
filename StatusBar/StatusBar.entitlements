@@ -2,9 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>com.apple.security.app-sandbox</key>
-	<true/>
-	<key>com.apple.security.network.client</key>
-	<true/>
+	<!--
+	  App Sandbox is intentionally DISABLED.
+
+	  Showing real Claude Code / Codex session limits requires reading those
+	  CLIs' existing logins — the "Claude Code-credentials" Keychain item and
+	  files under ~/.codex and ~/.claude. The sandbox confines an app to its own
+	  container and keychain group, so those can't be read while sandboxed. This
+	  app therefore ships non-sandboxed (not App Store distributable), like the
+	  CLIs it reads. Hardened Runtime remains enabled for notarization.
+	-->
 </dict>
 </plist>

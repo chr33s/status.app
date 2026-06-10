@@ -11,6 +11,38 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
 
     var id: String { rawValue }
 
+    /// How the provider is authenticated.
+    ///
+    /// - `localCLI`: read the existing login of the corresponding CLI
+    ///   (Claude Code / Codex) — no key entry, real session limits.
+    /// - `apiKey`: a read-only key the user pastes, stored in the Keychain.
+    enum AuthMode: Sendable { case localCLI, apiKey }
+
+    var authMode: AuthMode {
+        switch self {
+        case .claude, .codex: return .localCLI
+        case .gemini, .copilot: return .apiKey
+        }
+    }
+
+    /// Name of the CLI whose login is reused (for `localCLI` providers).
+    var cliName: String? {
+        switch self {
+        case .claude: return "Claude Code"
+        case .codex: return "Codex CLI"
+        default: return nil
+        }
+    }
+
+    /// Hint shown when a CLI login can't be found.
+    var cliSignInHint: String {
+        switch self {
+        case .claude: return "Install Claude Code and run `claude` to sign in."
+        case .codex: return "Install the Codex CLI and run `codex` to sign in."
+        default: return ""
+        }
+    }
+
     var displayName: String {
         switch self {
         case .codex: return "Codex"

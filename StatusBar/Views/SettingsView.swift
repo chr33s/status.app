@@ -52,40 +52,82 @@ struct ProviderKeyCard: View {
                         .foregroundStyle(provider.accentColor)
                     Text(provider.fullName).font(.headline)
                     Spacer()
-                    if Keychain.hasSecret(account: provider.keychainAccount) {
-                        Label("Saved", systemImage: "checkmark.circle.fill")
-                            .font(.caption)
-                            .foregroundStyle(.green)
-                    }
+                    statusBadge
                 }
 
-                SecureField("API key", text: $key)
-                    .textFieldStyle(.roundedBorder)
-                Text(provider.keyHelp)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                TextField(provider.identifierLabel, text: $identifier)
-                    .textFieldStyle(.roundedBorder)
-
-                TextField("Monthly budget in USD (optional)", text: $budgetText)
-                    .textFieldStyle(.roundedBorder)
-
-                HStack {
-                    Button("Save") { save() }
-                        .buttonStyle(.borderedProminent)
-                        .tint(provider.accentColor)
-                    Button("Remove") { remove() }
-                        .disabled(!Keychain.hasSecret(account: provider.keychainAccount))
-                    Spacer()
-                    if saved {
-                        Text("Saved").font(.caption).foregroundStyle(.secondary)
-                    }
+                switch provider.authMode {
+                case .localCLI:
+                    localCLIBody
+                case .apiKey:
+                    apiKeyBody
                 }
             }
             .padding(6)
         }
         .onAppear(perform: load)
+    }
+
+    @ViewBuilder
+    private var statusBadge: some View {
+        switch provider.authMode {
+        case .localCLI:
+            if LocalCredentials.exists(provider) {
+                Label("Detected", systemImage: "checkmark.circle.fill")
+                    .font(.caption).foregroundStyle(.green)
+            } else {
+                Label("Not found", systemImage: "exclamationmark.circle")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+        case .apiKey:
+            if Keychain.hasSecret(account: provider.keychainAccount) {
+                Label("Saved", systemImage: "checkmark.circle.fill")
+                    .font(.caption).foregroundStyle(.green)
+            }
+        }
+    }
+
+    // Local CLI providers (Claude Code / Codex): no key entry.
+    @ViewBuilder
+    private var localCLIBody: some View {
+        if LocalCredentials.exists(provider) {
+            Text("Using your \(provider.cliName ?? "CLI") login. No API key needed.")
+                .font(.caption).foregroundStyle(.secondary)
+        } else {
+            Text(provider.cliSignInHint)
+                .font(.caption).foregroundStyle(.secondary)
+        }
+
+        HStack {
+            Button("Re-check") { store.reload(provider) }
+                .buttonStyle(.borderedProminent)
+                .tint(provider.accentColor)
+            Spacer()
+        }
+    }
+
+    // API-key providers (Gemini / Copilot).
+    @ViewBuilder
+    private var apiKeyBody: some View {
+        SecureField("API key", text: $key)
+            .textFieldStyle(.roundedBorder)
+        Text(provider.keyHelp)
+            .font(.caption).foregroundStyle(.secondary)
+
+        TextField(provider.identifierLabel, text: $identifier)
+            .textFieldStyle(.roundedBorder)
+
+        TextField("Monthly budget in USD (optional)", text: $budgetText)
+            .textFieldStyle(.roundedBorder)
+
+        HStack {
+            Button("Save") { save() }
+                .buttonStyle(.borderedProminent)
+                .tint(provider.accentColor)
+            Button("Remove") { remove() }
+                .disabled(!Keychain.hasSecret(account: provider.keychainAccount))
+            Spacer()
+            if saved { Text("Saved").font(.caption).foregroundStyle(.secondary) }
+        }
     }
 
     private func load() {

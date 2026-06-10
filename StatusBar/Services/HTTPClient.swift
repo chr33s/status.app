@@ -1,13 +1,34 @@
 import Foundation
 
+/// Outcome of an HTTP request: parsed JSON body plus the response headers
+/// (lower-cased keys) and status code.
+struct HTTPResult {
+    let json: JSON
+    let headers: [String: String]
+    let status: Int
+
+    func header(_ name: String) -> String? { headers[name.lowercased()] }
+}
+
 /// Minimal async HTTP helper. Returns parsed JSON (as `Any`) so providers can
 /// navigate response shapes defensively without brittle Codable models.
 enum HTTPClient {
     static func getJSON(_ url: URL, headers: [String: String]) async throws -> Any {
+        try await send(url, headers: headers).json.value ?? [:]
+    }
+
+    /// General request returning the body, headers, and status.
+    static func send(
+        _ url: URL,
+        method: String = "GET",
+        headers: [String: String] = [:],
+        body: Data? = nil
+    ) async throws -> HTTPResult {
         var request = URLRequest(url: url)
-        request.httpMethod = "GET"
+        request.httpMethod = method
         request.timeoutInterval = 25
         request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.httpBody = body
         for (field, value) in headers {
             request.setValue(value, forHTTPHeaderField: field)
         }
@@ -16,16 +37,21 @@ enum HTTPClient {
         guard let http = response as? HTTPURLResponse else {
             throw ProviderError.invalidResponse
         }
+
+        var headerMap: [String: String] = [:]
+        for (key, value) in http.allHeaderFields {
+            if let key = key as? String, let value = value as? String {
+                headerMap[key.lowercased()] = value
+            }
+        }
+
         guard (200..<300).contains(http.statusCode) else {
-            let body = String(data: data, encoding: .utf8).map { String($0.prefix(280)) } ?? ""
-            throw ProviderError.http(status: http.statusCode, body: body)
+            let text = String(data: data, encoding: .utf8).map { String($0.prefix(280)) } ?? ""
+            throw ProviderError.http(status: http.statusCode, body: text)
         }
-        guard !data.isEmpty else { return [:] }
-        do {
-            return try JSONSerialization.jsonObject(with: data)
-        } catch {
-            throw ProviderError.decoding(error.localizedDescription)
-        }
+
+        let parsed: Any? = data.isEmpty ? nil : (try? JSONSerialization.jsonObject(with: data))
+        return HTTPResult(json: JSON(parsed), headers: headerMap, status: http.statusCode)
     }
 }
 

@@ -11,7 +11,7 @@ struct CopilotProvider: UsageProviding {
 
     func fetch(_ request: ProviderRequest) async throws -> UsageSnapshot {
         let headers = [
-            "Authorization": "Bearer \(request.apiKey)",
+            "Authorization": "Bearer \(request.credential.token)",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         ]

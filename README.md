@@ -8,8 +8,13 @@ subscription usage at a glance for:
 - **Gemini** — Google
 - **GitHub Copilot** — GitHub
 
-API keys are entered once and stored **read-only in the macOS Keychain**. They
-never leave your Mac except in requests to each provider's own API.
+- **Claude** and **Codex** reuse your existing **CLI login** (Claude Code /
+  Codex CLI) to show real subscription **session** and **weekly** limits — no
+  key to enter.
+- **Gemini** and **Copilot** use a **read-only API key** stored in the macOS
+  Keychain.
+
+Nothing leaves your Mac except requests to each provider's own API.
 
 ## Features
 
@@ -22,7 +27,10 @@ never leave your Mac except in requests to each provider's own API.
   About, Quit.
 - Configurable auto-refresh interval, optional menu-bar usage badge, and
   launch-at-login (via `SMAppService`).
-- App Sandbox enabled, hardened runtime, network-client entitlement only.
+- Hardened Runtime enabled. **App Sandbox is disabled** — reading the Claude
+  Code / Codex CLI logins (a Keychain item and files under `~/.codex` /
+  `~/.claude`) isn't possible from within the sandbox, so the app ships
+  non-sandboxed (not App Store distributable), like the CLIs it reads.
 
 ## Requirements
 
@@ -47,35 +55,35 @@ xcodebuild -project StatusBar.xcodeproj -scheme StatusBar -configuration Release
 
 ## Configuration
 
-Open **Settings… → Providers** and paste a key for each service you want to
-track. All keys should be **read-only**:
-
-| Provider | Key type | Usage source |
-|----------|----------|--------------|
-| Codex (OpenAI) | Admin API key `sk-admin-…` | `GET /v1/organization/costs`, `…/usage/completions` |
-| Claude (Anthropic) | Admin API key `sk-ant-admin…` | `GET /v1/organizations/cost_report`, `…/usage_report/messages` |
+| Provider | Auth | Usage source |
+|----------|------|--------------|
+| Claude | **Claude Code login** (read automatically) | OAuth probe → `anthropic-ratelimit-unified-*` headers → Session (5h) / Weekly (7d) meters |
+| Codex | **Codex CLI login** (read automatically) | ChatGPT OAuth → `rate_limits.primary` / `.secondary` windows |
 | Gemini (Google) | AI Studio API key | `GET /v1beta/models` (connectivity); usage lives in Cloud billing |
 | GitHub Copilot | Fine-grained token, read-only billing | `GET /users/{login}/settings/billing/usage` |
 
-Optional per-provider fields:
+- **Claude / Codex** need no setup beyond being signed into the respective CLI
+  (`claude` / `codex`). The app reads:
+  - Claude — the `Claude Code-credentials` Keychain item, or
+    `~/.claude/.credentials.json`.
+  - Codex — `~/.codex/auth.json`.
+- **Gemini / Copilot** — open **Settings… → Providers** and paste a read-only
+  key. Optional identifier (Cloud project / GitHub username, auto-detected) and
+  monthly budget (drives the *Extra usage* meter).
 
-- **Identifier** — org ID (OpenAI/Anthropic), Cloud project (Gemini), or GitHub
-  username (auto-detected from the token if blank).
-- **Monthly budget (USD)** — drives the *Extra usage* meter.
+### Caveats on the CLI session limits
 
-### Notes on usage APIs
+The subscription **session-limit** surfaces for Claude and Codex are not public,
+documented APIs — the app reads the same data the CLIs themselves use. The exact
+endpoints, headers, and response shapes are therefore **best-effort** and may
+shift between CLI releases. They're each isolated in one place
+(`ClaudeProvider` / `CodexProvider`, with the `rate_limits` parsing in
+`SessionUsage`) so they're easy to adjust, and the app degrades to a friendly
+"signed in — limits unavailable" note rather than failing. Verify behaviour on
+your Mac and tweak the endpoint constants if a CLI update changes them.
 
-- OpenAI and Anthropic expose spend and token usage only through their
-  **organization-level Admin APIs**, so an admin key is required to see figures.
-- Google does not expose per-key usage through a simple API key; the Gemini tab
-  validates the key and links to the dashboard. Set a budget to track a cap
-  manually.
-- GitHub's enhanced billing usage endpoint reports Copilot premium-request
-  quantity and net spend for the current month.
-
-If a provider's API shape changes, the relevant fetcher in
-`StatusBar/Services/Providers/` is the single place to adjust — responses are
-parsed defensively via the `JSON` helper rather than rigid models.
+The Gemini / Copilot API fetchers parse responses defensively via the `JSON`
+helper rather than rigid Codable models, so minor schema changes are tolerated.
 
 ## Project layout
 
@@ -84,10 +92,11 @@ StatusBar/
 ├─ StatusBarApp.swift          # @main, MenuBarExtra + Settings scenes
 ├─ Models/                     # Provider, Usage, LoadState
 ├─ Services/
-│  ├─ Keychain.swift           # read-only secret storage
-│  ├─ HTTPClient.swift         # async GET + JSON navigation
+│  ├─ Keychain.swift           # read-only API-key storage (Gemini/Copilot)
+│  ├─ LocalCredentials.swift   # reads Claude Code / Codex CLI logins
+│  ├─ HTTPClient.swift         # async requests + JSON/header navigation
 │  ├─ AppSettings.swift        # non-secret prefs (UserDefaults)
-│  ├─ UsageStore.swift         # state + refresh scheduling
-│  └─ Providers/               # one fetcher per service
+│  ├─ UsageStore.swift         # state, credential resolution, scheduling
+│  └─ Providers/               # one fetcher per service + SessionUsage helper
 └─ Views/                      # MenuBarExtra UI + Settings
 ```

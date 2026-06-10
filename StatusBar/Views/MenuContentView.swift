@@ -34,11 +34,6 @@ struct MenuContentView: View {
             MenuRow(title: "Refresh", systemImage: "arrow.clockwise") {
                 Task { await store.refreshAll() }
             }
-            SettingsLink {
-                MenuRowLabel(title: "Add Account…", systemImage: "person.crop.circle.badge.plus")
-            }
-            .buttonStyle(.plain)
-
             MenuRow(title: "Usage Dashboard", systemImage: "chart.bar.doc.horizontal") {
                 openURL(store.selected.dashboardURL)
             }
@@ -58,19 +53,11 @@ struct MenuContentView: View {
             }
             .buttonStyle(.plain)
 
-            MenuRow(title: "About StatusBar", systemImage: "info.circle") {
-                openAbout()
-            }
             MenuRow(title: "Quit", systemImage: "power") {
                 NSApplication.shared.terminate(nil)
             }
         }
         .padding(.vertical, 4)
-    }
-
-    private func openAbout() {
-        NSApp.activate(ignoringOtherApps: true)
-        NSApp.orderFrontStandardAboutPanel(nil)
     }
 }
 

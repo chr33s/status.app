@@ -1,8 +1,24 @@
 import Foundation
 
+/// How a provider request is authenticated.
+enum Credential: Sendable {
+    /// A read-only API key (Gemini, Copilot).
+    case apiKey(String)
+    /// An OAuth access token reused from a local CLI login (Claude Code, Codex),
+    /// plus an optional account id (Codex / ChatGPT).
+    case oauth(accessToken: String, accountID: String?)
+
+    var token: String {
+        switch self {
+        case .apiKey(let value): return value
+        case .oauth(let token, _): return token
+        }
+    }
+}
+
 /// Inputs required to fetch usage for one provider.
 struct ProviderRequest: Sendable {
-    let apiKey: String
+    let credential: Credential
     /// Optional, non-secret identifier (org id, project id, username).
     let identifier: String
     /// Optional monthly budget (USD) used to render the "Extra usage" meter.
@@ -32,8 +48,8 @@ extension UsageProviding {
 enum ProviderFactory {
     static func make(_ provider: Provider) -> UsageProviding {
         switch provider {
-        case .codex: return OpenAIProvider()
-        case .claude: return AnthropicProvider()
+        case .codex: return CodexProvider()
+        case .claude: return ClaudeProvider()
         case .gemini: return GeminiProvider()
         case .copilot: return CopilotProvider()
         }

@@ -32,15 +32,23 @@ struct ProviderDetailView: View {
     private var notConfigured: some View {
         VStack(alignment: .leading, spacing: 10) {
             header(plan: nil, subtitle: "Not configured")
-            Text("Add a read-only \(provider.vendor) API key to start tracking \(provider.fullName) usage.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            SettingsLink {
-                Label("Add API key…", systemImage: "key.fill")
+            switch provider.authMode {
+            case .localCLI:
+                Text("No \(provider.cliName ?? "CLI") login found. \(provider.cliSignInHint)")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .apiKey:
+                Text("Add a read-only \(provider.vendor) API key to start tracking \(provider.fullName) usage.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                SettingsLink {
+                    Label("Add API key…", systemImage: "key.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(provider.accentColor)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(provider.accentColor)
         }
     }
 

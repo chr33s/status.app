@@ -16,9 +16,7 @@ final class UsageStore: ObservableObject {
 
     init() {
         for provider in Provider.allCases {
-            states[provider] = Keychain.hasSecret(account: provider.keychainAccount)
-                ? .loading
-                : .notConfigured
+            states[provider] = Self.isConfigured(provider) ? .loading : .notConfigured
         }
         // Open on the first configured provider, if any.
         if let firstConfigured = Provider.allCases.first(where: { states[$0]?.isConfigured == true }) {
@@ -46,14 +44,14 @@ final class UsageStore: ObservableObject {
     }
 
     func refresh(_ provider: Provider) async {
-        guard let key = Keychain.get(account: provider.keychainAccount), !key.isEmpty else {
+        guard let credential = Self.credential(for: provider) else {
             states[provider] = .notConfigured
             return
         }
         states[provider] = .loading
 
         let request = ProviderRequest(
-            apiKey: key,
+            credential: credential,
             identifier: settings.identifier(for: provider),
             monthlyBudget: settings.budget(for: provider)
         )
@@ -64,6 +62,24 @@ final class UsageStore: ObservableObject {
         } catch {
             states[provider] = .failed(error.localizedDescription)
         }
+    }
+
+    // MARK: Credential resolution
+
+    /// Resolves the credential for a provider: a local CLI login for Claude /
+    /// Codex, or a Keychain-stored API key for Gemini / Copilot.
+    static func credential(for provider: Provider) -> Credential? {
+        switch provider.authMode {
+        case .localCLI:
+            return LocalCredentials.resolve(provider)
+        case .apiKey:
+            guard let key = Keychain.get(account: provider.keychainAccount), !key.isEmpty else { return nil }
+            return .apiKey(key)
+        }
+    }
+
+    static func isConfigured(_ provider: Provider) -> Bool {
+        credential(for: provider) != nil
     }
 
     /// Called by the settings UI after a key is added/removed.

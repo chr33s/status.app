@@ -10,9 +10,10 @@ struct GeminiProvider: UsageProviding {
     private let base = "https://generativelanguage.googleapis.com/v1beta"
 
     func fetch(_ request: ProviderRequest) async throws -> UsageSnapshot {
+        let apiKey = request.credential.token
         var comps = URLComponents(string: "\(base)/models")!
         comps.queryItems = [
-            URLQueryItem(name: "key", value: request.apiKey),
+            URLQueryItem(name: "key", value: apiKey),
             URLQueryItem(name: "pageSize", value: "1"),
         ]
         // Validates the key; throws on auth failure.
