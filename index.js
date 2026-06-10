@@ -36,7 +36,7 @@ function createWindow() {
   });
 
   window.loadFile('index.html');
-  window.on('close', () => {
+  window.on('closed', () => {
     window = null;
   });
 }
