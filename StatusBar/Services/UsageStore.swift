@@ -44,34 +44,49 @@ final class UsageStore: ObservableObject {
     }
 
     func refresh(_ provider: Provider) async {
-        guard let credential = Self.credential(for: provider) else {
+        guard let credential = await Self.credential(for: provider) else {
             states[provider] = .notConfigured
             return
         }
         states[provider] = .loading
 
-        let request = ProviderRequest(
-            credential: credential,
-            identifier: settings.identifier(for: provider),
-            monthlyBudget: settings.budget(for: provider)
-        )
         let impl = ProviderFactory.make(provider)
         do {
-            let snapshot = try await impl.fetch(request)
-            states[provider] = .loaded(snapshot)
+            states[provider] = .loaded(try await fetch(provider, impl, credential))
+        } catch let error as ProviderError where error.isUnauthorized && provider.authMode == .localCLI {
+            // Token likely expired — force a refresh and retry once.
+            if let refreshed = await LocalCredentials.forceRefresh(provider) {
+                do {
+                    states[provider] = .loaded(try await fetch(provider, impl, refreshed))
+                } catch {
+                    states[provider] = .failed(error.localizedDescription)
+                }
+            } else {
+                states[provider] = .failed(error.localizedDescription)
+            }
         } catch {
             states[provider] = .failed(error.localizedDescription)
         }
     }
 
+    private func fetch(_ provider: Provider, _ impl: UsageProviding, _ credential: Credential) async throws -> UsageSnapshot {
+        let request = ProviderRequest(
+            credential: credential,
+            identifier: settings.identifier(for: provider),
+            monthlyBudget: settings.budget(for: provider)
+        )
+        return try await impl.fetch(request)
+    }
+
     // MARK: Credential resolution
 
     /// Resolves the credential for a provider: a local CLI login for Claude /
-    /// Codex, or a Keychain-stored API key for Gemini / Copilot.
-    static func credential(for provider: Provider) -> Credential? {
+    /// Codex (refreshing if expired), or a Keychain-stored API key for
+    /// Gemini / Copilot.
+    static func credential(for provider: Provider) async -> Credential? {
         switch provider.authMode {
         case .localCLI:
-            return LocalCredentials.resolve(provider)
+            return await LocalCredentials.freshCredential(provider)
         case .apiKey:
             guard let key = Keychain.get(account: provider.keychainAccount), !key.isEmpty else { return nil }
             return .apiKey(key)
@@ -79,7 +94,10 @@ final class UsageStore: ObservableObject {
     }
 
     static func isConfigured(_ provider: Provider) -> Bool {
-        credential(for: provider) != nil
+        switch provider.authMode {
+        case .localCLI: return LocalCredentials.exists(provider)
+        case .apiKey: return Keychain.hasSecret(account: provider.keychainAccount)
+        }
     }
 
     /// Called by the settings UI after a key is added/removed.

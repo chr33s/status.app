@@ -4,10 +4,13 @@ import Foundation
 /// (lower-cased keys) and status code.
 struct HTTPResult {
     let json: JSON
+    /// Raw body — used for non-JSON responses such as SSE streams.
+    let data: Data
     let headers: [String: String]
     let status: Int
 
     func header(_ name: String) -> String? { headers[name.lowercased()] }
+    var text: String { String(data: data, encoding: .utf8) ?? "" }
 }
 
 /// Minimal async HTTP helper. Returns parsed JSON (as `Any`) so providers can
@@ -51,7 +54,7 @@ enum HTTPClient {
         }
 
         let parsed: Any? = data.isEmpty ? nil : (try? JSONSerialization.jsonObject(with: data))
-        return HTTPResult(json: JSON(parsed), headers: headerMap, status: http.statusCode)
+        return HTTPResult(json: JSON(parsed), data: data, headers: headerMap, status: http.statusCode)
     }
 }
 

@@ -67,6 +67,11 @@ xcodebuild -project StatusBar.xcodeproj -scheme StatusBar -configuration Release
   - Claude — the `Claude Code-credentials` Keychain item, or
     `~/.claude/.credentials.json`.
   - Codex — `~/.codex/auth.json`.
+
+  When an OAuth access token is expired (detected from its stored expiry / JWT
+  `exp`) — or a request returns 401 — the app refreshes it via the CLI's OAuth
+  client and **writes the rotated token back** to the same store so the CLI stays
+  in sync. See the caveat below.
 - **Gemini / Copilot** — open **Settings… → Providers** and paste a read-only
   key. Optional identifier (Cloud project / GitHub username, auto-detected) and
   monthly budget (drives the *Extra usage* meter).
@@ -81,6 +86,14 @@ shift between CLI releases. They're each isolated in one place
 `SessionUsage`) so they're easy to adjust, and the app degrades to a friendly
 "signed in — limits unavailable" note rather than failing. Verify behaviour on
 your Mac and tweak the endpoint constants if a CLI update changes them.
+
+**Token refresh / write-back.** Refreshing a rotating OAuth token and writing it
+back into another tool's store (`LocalCredentials`) keeps the CLI consistent,
+but the OAuth client ids, token endpoints, and stored JSON shapes are observed
+rather than documented. If a refresh-token rotation isn't persisted correctly it
+could log the corresponding CLI out. Refresh only runs when a token is actually
+expired (or after a 401), writes back atomically, and falls back to the existing
+token on failure — but please confirm it behaves on your Mac before relying on it.
 
 The Gemini / Copilot API fetchers parse responses defensively via the `JSON`
 helper rather than rigid Codable models, so minor schema changes are tolerated.

@@ -6,6 +6,12 @@ enum ProviderError: LocalizedError {
     case decoding(String)
     case missingConfiguration(String)
 
+    /// True for auth failures that a token refresh might resolve.
+    var isUnauthorized: Bool {
+        if case let .http(status, _) = self { return status == 401 || status == 403 }
+        return false
+    }
+
     var errorDescription: String? {
         switch self {
         case .invalidResponse:

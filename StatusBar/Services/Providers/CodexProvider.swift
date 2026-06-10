@@ -27,13 +27,19 @@ struct CodexProvider: UsageProviding {
         var snapshot = UsageSnapshot()
         snapshot.planName = "Codex CLI"
 
-        if let limits = try? await fetchRateLimits(token: token, accountID: accountID) {
+        do {
+            let limits = try await fetchRateLimits(token: token, accountID: accountID)
             if let primary = SessionUsage.windowSection(title: "Session", limits["primary"]) {
                 snapshot.sections.append(primary)
             }
             if let secondary = SessionUsage.windowSection(title: "Weekly", limits["secondary"]) {
                 snapshot.sections.append(secondary)
             }
+        } catch let error as ProviderError where error.isUnauthorized {
+            // Let the store refresh the token and retry.
+            throw error
+        } catch {
+            // Other failures shouldn't blank the tab — show a note instead.
         }
 
         if snapshot.sections.isEmpty {
@@ -43,29 +49,57 @@ struct CodexProvider: UsageProviding {
     }
 
     /// Requests the current `rate_limits` snapshot for the signed-in ChatGPT
-    /// account. Returns the JSON `rate_limits` object.
+    /// account. The Codex back-end replies with a Server-Sent Events stream; the
+    /// `rate_limits` object is carried inside one of the events (typically
+    /// `response.completed`), so we scan every `data:` payload for it.
     private func fetchRateLimits(token: String, accountID: String?) async throws -> JSON {
         let url = URL(string: "https://chatgpt.com/backend-api/codex/responses")!
         var headers = [
             "Authorization": "Bearer \(token)",
             "Content-Type": "application/json",
+            "Accept": "text/event-stream",
             "OpenAI-Beta": "responses=experimental",
             "originator": "codex_cli_rs",
         ]
         if let accountID { headers["chatgpt-account-id"] = accountID }
 
-        // Minimal probe; the response carries the account's rate_limits.
+        // Minimal streamed probe; the stream carries the account's rate_limits.
         let body = try JSONSerialization.data(withJSONObject: [
             "model": "gpt-5-codex",
             "input": [["role": "user", "content": "ping"]],
             "max_output_tokens": 1,
-            "stream": false,
+            "stream": true,
         ])
 
         let result = try await HTTPClient.send(url, method: "POST", headers: headers, body: body)
-        // `rate_limits` may sit at the top level or under `response`.
-        let direct = result.json["rate_limits"]
-        if direct.value != nil { return direct }
-        return result.json["response"]["rate_limits"]
+        return Self.rateLimits(fromSSE: result.text) ?? result.json["rate_limits"]
+    }
+
+    /// Parses an SSE body, returning the first `rate_limits` object found in any
+    /// event payload.
+    static func rateLimits(fromSSE text: String) -> JSON? {
+        for line in text.split(whereSeparator: \.isNewline) {
+            guard line.hasPrefix("data:") else { continue }
+            let payload = String(line.dropFirst("data:".count)).trimmingCharacters(in: .whitespaces)
+            guard payload != "[DONE]", let data = payload.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) else { continue }
+            if let found = findRateLimits(object) { return JSON(found) }
+        }
+        return nil
+    }
+
+    /// Depth-first search for a `rate_limits` key anywhere in a JSON tree.
+    private static func findRateLimits(_ any: Any?) -> Any? {
+        if let dict = any as? [String: Any] {
+            if let value = dict["rate_limits"] { return value }
+            for value in dict.values {
+                if let found = findRateLimits(value) { return found }
+            }
+        } else if let array = any as? [Any] {
+            for value in array {
+                if let found = findRateLimits(value) { return found }
+            }
+        }
+        return nil
     }
 }
