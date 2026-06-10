@@ -5,6 +5,7 @@ import SwiftUI
 struct MenuBarLabel: View {
     @EnvironmentObject private var store: UsageStore
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var telemetry: TelemetryStore
 
     var body: some View {
         Group {
@@ -15,6 +16,13 @@ struct MenuBarLabel: View {
                 Image(systemName: "chart.bar.fill")
             }
         }
-        .task { store.startAutoRefresh() }
+        .task {
+            store.startAutoRefresh()
+            telemetry.start()
+            if settings.telemetryAutoConfigured {
+                let endpoint = telemetry.endpoint
+                Task.detached { OTelSetup.configure(endpoint: endpoint) }
+            }
+        }
     }
 }

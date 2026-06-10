@@ -1,3 +1,4 @@
+import AppKit
 import ServiceManagement
 import SwiftUI
 
@@ -6,10 +7,12 @@ struct SettingsView: View {
         TabView {
             ProvidersSettingsView()
                 .tabItem { Label("Providers", systemImage: "person.badge.key") }
+            TelemetrySettingsView()
+                .tabItem { Label("Telemetry", systemImage: "antenna.radiowaves.left.and.right") }
             GeneralSettingsView()
                 .tabItem { Label("General", systemImage: "gearshape") }
         }
-        .frame(width: 460)
+        .frame(width: 480)
     }
 }
 
@@ -88,6 +91,87 @@ struct ProviderStatusCard: View {
         case .failed(let message):
             Text(message).font(.caption).foregroundStyle(.secondary)
                 .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+// MARK: - Telemetry
+
+struct TelemetrySettingsView: View {
+    @EnvironmentObject private var telemetry: TelemetryStore
+    @EnvironmentObject private var settings: AppSettings
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 8) {
+                    Circle().fill(telemetry.isRunning ? .green : .red).frame(width: 8, height: 8)
+                    Text(telemetry.isRunning
+                         ? "Collector running on \(telemetry.endpoint)"
+                         : "Collector not running")
+                        .font(.callout)
+                }
+
+                Toggle("Automatically configure Claude & Gemini", isOn: Binding(
+                    get: { settings.telemetryAutoConfigured },
+                    set: { on in
+                        settings.telemetryAutoConfigured = on
+                        if on { OTelSetup.configure(endpoint: telemetry.endpoint) }
+                        else { OTelSetup.revert() }
+                    }
+                ))
+                Text("Writes OTLP settings into ~/.claude/settings.json and ~/.gemini/settings.json (safely merged). Restart each CLI afterwards.")
+                    .font(.caption).foregroundStyle(.secondary)
+
+                ForEach(Provider.allCases) { provider in
+                    TelemetryProviderRow(provider: provider, endpoint: telemetry.endpoint)
+                }
+            }
+            .padding(20)
+        }
+        .frame(height: 480)
+    }
+}
+
+struct TelemetryProviderRow: View {
+    let provider: Provider
+    let endpoint: String
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: provider.systemImage).foregroundStyle(provider.accentColor)
+                    Text(provider.fullName).font(.headline)
+                    Spacer()
+                    if OTelSetup.isAutomatic(provider) {
+                        if OTelSetup.isConfigured(provider, endpoint: endpoint) {
+                            Label("Configured", systemImage: "checkmark.circle.fill")
+                                .font(.caption).foregroundStyle(.green)
+                        } else {
+                            Text("Auto").font(.caption).foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Text("Manual").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+
+                if let manual = OTelSetup.manualSnippet(provider, endpoint: endpoint) {
+                    Text("Add to \(manual.file):").font(.caption).foregroundStyle(.secondary)
+                    Text(manual.snippet)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(manual.snippet, forType: .string)
+                    }
+                    .controlSize(.small)
+                }
+            }
+            .padding(6)
         }
     }
 }

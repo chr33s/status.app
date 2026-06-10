@@ -66,6 +66,31 @@ If a CLI is configured with a plain API key instead of an OAuth login
 (`OPENAI_API_KEY` in `auth.json`, `GEMINI_API_KEY` in `~/.gemini/.env`/env), the
 app uses it where it can but notes that subscription limits aren't available.
 
+## Live usage via OpenTelemetry
+
+Alongside the on-demand probes, the app runs an **embedded OTLP/HTTP collector**
+on `http://localhost:4318` and shows the token/cost counts each CLI reports as
+you actually use it — a passive, vendor-sanctioned channel (no probes, no
+credential handling). All four CLIs export OTLP over HTTP as `application/json`.
+
+Open **Settings → Telemetry**:
+
+- **Claude & Gemini** are configured automatically (a safe JSON merge into
+  `~/.claude/settings.json` and `~/.gemini/settings.json`) when you toggle
+  *Automatically configure*.
+- **Codex** (`~/.codex/config.toml` `[otel]`) and **Copilot** (shell `OTEL_*`
+  env) show a copy-paste snippet, since we don't rewrite TOML or your shell rc.
+
+Restart each CLI after enabling. Live token/cost then appears under each
+provider in the menu (accumulated since the app launched). This is
+complementary to the probe meters: telemetry gives accurate token/cost from real
+usage; the probes give the subscription Session/Weekly/quota windows on demand.
+
+> Telemetry only updates while a CLI is running, and exporters are configured for
+> delta temporality so counts sum correctly. Metric names, the Codex exporter
+> syntax, and Copilot's enable flag are observed and isolated in
+> `OTelMetricsParser` / `OTelSetup` — verify on your Mac.
+
 ## Token refresh & re-authentication
 
 - When an OAuth access token is expired (from its stored expiry / JWT `exp`) — or

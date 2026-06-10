@@ -11,6 +11,20 @@ enum Format {
         "\(Int((fraction * 100).rounded()))% used"
     }
 
+    /// "942" / "15K" / "218M"
+    static func compact(_ count: Double) -> String {
+        switch abs(count) {
+        case 1_000_000...: return trim(count / 1_000_000) + "M"
+        case 1_000...: return trim(count / 1_000) + "K"
+        default: return String(Int(count.rounded()))
+        }
+    }
+
+    private static func trim(_ value: Double) -> String {
+        let rounded = (value * 10).rounded() / 10
+        return rounded == rounded.rounded() ? String(Int(rounded)) : String(format: "%.1f", rounded)
+    }
+
     /// "Resets in 3h 53m" / "Resets in 3d 20h"
     static func resetCountdown(to date: Date, now: Date = Date()) -> String {
         let seconds = max(0, date.timeIntervalSince(now))
