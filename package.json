@@ -1,7 +1,7 @@
 {
   "name": "statusbar.app",
   "version": "1.0.0",
-  "description": "",
+  "description": "Status bar app for monitoring AI subscription usage",
   "main": "index.js",
   "scripts": {
     "start": "electron .",
