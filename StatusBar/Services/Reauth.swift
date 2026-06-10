@@ -24,7 +24,7 @@ enum Reauth {
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
         } catch {
             // Fall back to the provider's dashboard if we can't stage the script.
-            NSWorkspace.shared.open(provider.dashboardURL)
+            _ = NSWorkspace.shared.open(provider.dashboardURL)
             return
         }
 
@@ -34,7 +34,7 @@ enum Reauth {
         NSWorkspace.shared.open([url], withApplicationAt: terminal, configuration: configuration) { _, error in
             if error != nil {
                 // Older path or missing Terminal — fall back to a generic open.
-                NSWorkspace.shared.open(url)
+                _ = NSWorkspace.shared.open(url)
             }
         }
     }

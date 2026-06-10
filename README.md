@@ -17,8 +17,8 @@ Mac except requests to each provider's own API.
 - Lives entirely in the menu bar (`LSUIElement`), no Dock icon, no windows.
 - Tabbed strip to switch between providers; the selected tab is tinted with the
   provider's brand colour. A red dot marks a provider needing attention.
-- Per-provider detail: usage meters (Session / Weekly / per-model quota) and a
-  **Cost** summary where the provider exposes one.
+- Per-provider detail: usage meters (Session / Weekly / per-model quota, plus
+  Copilot premium requests & month-to-date spend).
 - **Automatic token refresh** — expired OAuth tokens are refreshed via the CLI's
   client and written back so the CLI stays in sync.
 - **Re-authenticate prompt** — when a token is expired/invalid and can't be
@@ -85,6 +85,9 @@ between CLI releases. Each is isolated for easy adjustment:
 - Claude / Codex session limits — `ClaudeProvider` / `CodexProvider` + `SessionUsage`.
 - Gemini quota — `GeminiProvider` (`v1internal:retrieveUserQuota`; a full bucket
   may omit `remainingAmount`/`remainingFraction`, treated as 0% used).
+- Copilot billing — the `gh` OAuth token may lack the **billing / "Plan"** read
+  permission the usage endpoint needs, returning 403 → re-auth. If so, grant it
+  with `gh auth refresh -s read:org` (or use a token with Plan access).
 - OAuth clients / token endpoints / write-back — `LocalCredentials`. Writing a
   rotated refresh token back into another tool's store keeps the CLI consistent,
   but if a rotation isn't persisted correctly it could log that CLI out. Refresh

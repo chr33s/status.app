@@ -1,6 +1,6 @@
+import Combine
 import Foundation
 import ServiceManagement
-import SwiftUI
 
 /// Non-secret preferences (refresh cadence, badge, launch-at-login).
 @MainActor

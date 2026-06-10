@@ -71,11 +71,6 @@ struct ProviderDetailView: View {
             Divider()
             SectionView(section: section, tint: provider.accentColor)
         }
-
-        if let cost = snapshot.cost, cost.hasData {
-            Divider()
-            CostView(cost: cost, dashboardURL: provider.dashboardURL)
-        }
     }
 
     // MARK: Header
@@ -96,46 +91,5 @@ struct ProviderDetailView: View {
                     .foregroundStyle(.secondary)
             }
         }
-    }
-}
-
-/// The "Cost" block: today + last 30 days, with a link to the dashboard.
-struct CostView: View {
-    let cost: CostInfo
-    let dashboardURL: URL
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Cost")
-                    .font(.headline)
-                Spacer()
-                Link(destination: dashboardURL) {
-                    Image(systemName: "chevron.right")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            if let line = line(prefix: "Today", amount: cost.todayAmount, tokens: cost.todayTokens) {
-                Text(line).font(.callout).foregroundStyle(.secondary)
-            }
-            if let line = line(prefix: "Last 30 days", amount: cost.last30Amount, tokens: cost.last30Tokens) {
-                Text(line).font(.callout).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func line(prefix: String, amount: Double?, tokens: Double?) -> String? {
-        guard amount != nil || tokens != nil else { return nil }
-        var parts: [String] = []
-        if let amount { parts.append(Format.currency(amount)) }
-        if let tokens, tokens > 0 { parts.append("\(Format.tokens(tokens)) tokens") }
-        return "\(prefix): " + parts.joined(separator: " · ")
-    }
-}
-
-extension CostInfo {
-    var hasData: Bool {
-        todayAmount != nil || last30Amount != nil || todayTokens != nil || last30Tokens != nil
     }
 }

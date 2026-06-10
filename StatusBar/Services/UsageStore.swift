@@ -1,4 +1,3 @@
-import Combine
 import Foundation
 import SwiftUI
 
@@ -13,13 +12,13 @@ final class UsageStore: ObservableObject {
     private let settings = AppSettings.shared
     private var timer: Timer?
     private var didStart = false
+    private var didAutoSelect = false
 
     init() {
+        // Seed as loading without touching the Keychain/disk on the main thread;
+        // the first refresh resolves real state asynchronously.
         for provider in Provider.allCases {
-            states[provider] = LocalCredentials.exists(provider) ? .loading : .notConfigured
-        }
-        if let firstConfigured = Provider.allCases.first(where: { states[$0]?.isConfigured == true }) {
-            selected = firstConfigured
+            states[provider] = .loading
         }
     }
 
@@ -40,10 +39,22 @@ final class UsageStore: ObservableObject {
             }
         }
         lastRefresh = Date()
+        autoSelectFirstConfigured()
+    }
+
+    /// The first time any provider is signed in, switch to it if the current
+    /// selection isn't configured.
+    private func autoSelectFirstConfigured() {
+        guard !didAutoSelect,
+              let firstConfigured = Provider.allCases.first(where: { state(for: $0).isConfigured }) else { return }
+        didAutoSelect = true
+        if !state(for: selected).isConfigured {
+            selected = firstConfigured
+        }
     }
 
     func refresh(_ provider: Provider) async {
-        guard let credential = await LocalCredentials.freshCredential(provider) else {
+        guard let credential = await LocalCredentials.credential(for: provider) else {
             states[provider] = .notConfigured
             return
         }

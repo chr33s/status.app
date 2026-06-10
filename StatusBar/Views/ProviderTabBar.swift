@@ -3,8 +3,7 @@ import SwiftUI
 /// Horizontal strip of provider chips at the top of the menu. The selected chip
 /// is filled with its accent colour.
 struct ProviderTabBar: View {
-    @Binding var selected: Provider
-    let store: UsageStore
+    @EnvironmentObject private var store: UsageStore
 
     var body: some View {
         HStack(spacing: 4) {
@@ -17,9 +16,9 @@ struct ProviderTabBar: View {
     }
 
     private func tab(_ provider: Provider) -> some View {
-        let isSelected = provider == selected
+        let isSelected = provider == store.selected
         return Button {
-            selected = provider
+            store.selected = provider
         } label: {
             VStack(spacing: 4) {
                 ZStack(alignment: .topTrailing) {

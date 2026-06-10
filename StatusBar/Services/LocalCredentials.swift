@@ -1,9 +1,9 @@
 import Foundation
 import Security
 
-/// Reads (and, when expired, refreshes) the existing logins of the Claude Code,
-/// Codex, Gemini, and GitHub CLIs so the app can show real usage without asking
-/// for any API key.
+/// Reads the existing logins of the Claude Code, Codex, Gemini, and GitHub CLIs
+/// so the app can show real usage without asking for any API key. When a request
+/// returns 401 the caller asks `forceRefresh` to exchange the refresh token.
 ///
 /// Reading these locations (another app's Keychain item, files under the home
 /// directory) is only possible because this app is **not sandboxed**.
@@ -27,22 +27,19 @@ enum LocalCredentials {
 
     // MARK: Public API
 
-    static func exists(_ provider: Provider) -> Bool {
-        load(provider) != nil
-    }
-
-    /// Returns a usable credential, refreshing first if the token is expired.
-    static func freshCredential(_ provider: Provider) async -> Credential? {
-        guard var loaded = load(provider) else { return nil }
-        if loaded.isExpired, loaded.refresh != nil, let refreshed = try? await refresh(loaded) {
-            loaded = refreshed
-        }
+    /// The current credential as stored, without any network refresh. Refresh is
+    /// driven reactively by `forceRefresh` after a request returns 401.
+    ///
+    /// `async` (and not actor-isolated) so the Keychain/file reads run off the
+    /// main thread when called from the `@MainActor` store.
+    static func credential(for provider: Provider) async -> Credential? {
+        guard let loaded = load(provider) else { return nil }
         if let key = loaded.apiKey { return .apiKey(key) }
         return .oauth(accessToken: loaded.access, accountID: loaded.accountID)
     }
 
-    /// Forces a refresh regardless of expiry (used after a 401), then returns the
-    /// new credential. Returns nil when there's no refresh token to use.
+    /// Exchanges the refresh token for a new access token and writes it back to
+    /// the CLI's store. Returns nil when there's no refresh token to use.
     static func forceRefresh(_ provider: Provider) async -> Credential? {
         guard let loaded = load(provider), loaded.refresh != nil,
               let refreshed = try? await refresh(loaded) else { return nil }
@@ -56,18 +53,12 @@ enum LocalCredentials {
     private struct Loaded {
         var access: String
         var refresh: String?
-        var expiresAt: Date?
         var accountID: String?
         var source: Source
         /// Set when the CLI is configured with a plain API key rather than OAuth.
         var apiKey: String?
         /// Full original JSON, preserved so write-back only touches token fields.
         var raw: [String: Any]
-
-        var isExpired: Bool {
-            guard let expiresAt else { return false }
-            return Date().addingTimeInterval(60) >= expiresAt
-        }
     }
 
     private static func load(_ provider: Provider) -> Loaded? {
@@ -97,9 +88,8 @@ enum LocalCredentials {
         let oauth = root["claudeAiOauth"]
         guard let access = oauth["accessToken"].string ?? root["accessToken"].string,
               !access.isEmpty else { return nil }
-        let expiresAt = oauth["expiresAt"].double.map { Date(timeIntervalSince1970: $0 / 1000) }
         return Loaded(access: access, refresh: oauth["refreshToken"].string,
-                      expiresAt: expiresAt, accountID: nil, source: source, apiKey: nil, raw: raw)
+                      accountID: nil, source: source, apiKey: nil, raw: raw)
     }
 
     private static func claudeKeychainJSON() -> [String: Any]? {
@@ -123,11 +113,11 @@ enum LocalCredentials {
         let root = JSON(raw)
         if let access = root["tokens"]["access_token"].string, !access.isEmpty {
             return Loaded(access: access, refresh: root["tokens"]["refresh_token"].string,
-                          expiresAt: jwtExpiry(access), accountID: root["tokens"]["account_id"].string,
+                          accountID: root["tokens"]["account_id"].string,
                           source: .codexFile, apiKey: nil, raw: raw)
         }
         if let key = root["OPENAI_API_KEY"].string, !key.isEmpty {
-            return Loaded(access: "", refresh: nil, expiresAt: nil, accountID: nil,
+            return Loaded(access: "", refresh: nil, accountID: nil,
                           source: .codexFile, apiKey: key, raw: raw)
         }
         return nil
@@ -140,13 +130,12 @@ enum LocalCredentials {
         if let raw = readJSONObject(file) {
             let root = JSON(raw)
             if let access = root["access_token"].string, !access.isEmpty {
-                let expiresAt = root["expiry_date"].double.map { Date(timeIntervalSince1970: $0 / 1000) }
                 return Loaded(access: access, refresh: root["refresh_token"].string,
-                              expiresAt: expiresAt, accountID: nil, source: .geminiFile, apiKey: nil, raw: raw)
+                              accountID: nil, source: .geminiFile, apiKey: nil, raw: raw)
             }
         }
         if let key = geminiAPIKey() {
-            return Loaded(access: "", refresh: nil, expiresAt: nil, accountID: nil,
+            return Loaded(access: "", refresh: nil, accountID: nil,
                           source: .geminiFile, apiKey: key, raw: [:])
         }
         return nil
@@ -178,14 +167,14 @@ enum LocalCredentials {
                 for (key, value) in raw where key.contains("github.com") {
                     let entry = JSON(value)
                     if let token = entry["oauth_token"].string, !token.isEmpty {
-                        return Loaded(access: token, refresh: nil, expiresAt: nil,
+                        return Loaded(access: token, refresh: nil,
                                       accountID: entry["user"].string, source: .copilotConfig, apiKey: nil, raw: [:])
                     }
                 }
             }
         }
         if let (token, user) = ghHostsToken() {
-            return Loaded(access: token, refresh: nil, expiresAt: nil,
+            return Loaded(access: token, refresh: nil,
                           accountID: user, source: .copilotConfig, apiKey: nil, raw: [:])
         }
         return nil
@@ -250,13 +239,12 @@ enum LocalCredentials {
         var updated = loaded
         updated.access = access
         updated.refresh = result.json["refresh_token"].string ?? loaded.refresh
-        if let expiresIn = result.json["expires_in"].double {
-            updated.expiresAt = Date().addingTimeInterval(expiresIn)
-        }
         var oauth = (updated.raw["claudeAiOauth"] as? [String: Any]) ?? [:]
         oauth["accessToken"] = updated.access
         if let refresh = updated.refresh { oauth["refreshToken"] = refresh }
-        if let expiresAt = updated.expiresAt { oauth["expiresAt"] = expiresAt.timeIntervalSince1970 * 1000 }
+        if let expiresIn = result.json["expires_in"].double {
+            oauth["expiresAt"] = Date().addingTimeInterval(expiresIn).timeIntervalSince1970 * 1000
+        }
         updated.raw["claudeAiOauth"] = oauth
         persist(updated.raw, to: updated.source)
         return updated
@@ -273,7 +261,6 @@ enum LocalCredentials {
         var updated = loaded
         updated.access = access
         updated.refresh = result.json["refresh_token"].string ?? loaded.refresh
-        updated.expiresAt = jwtExpiry(access)
         var tokens = (updated.raw["tokens"] as? [String: Any]) ?? [:]
         tokens["access_token"] = updated.access
         if let idToken = result.json["id_token"].string { tokens["id_token"] = idToken }
@@ -298,11 +285,10 @@ enum LocalCredentials {
 
         var updated = loaded
         updated.access = access
-        if let expiresIn = result.json["expires_in"].double {
-            updated.expiresAt = Date().addingTimeInterval(expiresIn)
-            updated.raw["expiry_date"] = updated.expiresAt!.timeIntervalSince1970 * 1000
-        }
         updated.raw["access_token"] = access
+        if let expiresIn = result.json["expires_in"].double {
+            updated.raw["expiry_date"] = Date().addingTimeInterval(expiresIn).timeIntervalSince1970 * 1000
+        }
         persist(updated.raw, to: updated.source)
         return updated
     }
@@ -338,20 +324,6 @@ enum LocalCredentials {
     private static func readJSONObject(_ url: URL) -> [String: Any]? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-    }
-
-    /// Decodes the `exp` claim from a JWT access/id token.
-    private static func jwtExpiry(_ token: String) -> Date? {
-        let segments = token.split(separator: ".")
-        guard segments.count >= 2 else { return nil }
-        var base64 = String(segments[1])
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        while base64.count % 4 != 0 { base64 += "=" }
-        guard let data = Data(base64Encoded: base64),
-              let json = try? JSONSerialization.jsonObject(with: data),
-              let exp = JSON(json)["exp"].double else { return nil }
-        return Date(timeIntervalSince1970: exp)
     }
 }
 

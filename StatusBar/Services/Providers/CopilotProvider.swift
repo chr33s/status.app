@@ -59,7 +59,14 @@ struct CopilotProvider: UsageProviding {
                 trailing: nil
             ))
         }
-        snapshot.cost = CostInfo(todayAmount: nil, todayTokens: nil, last30Amount: netAmount, last30Tokens: nil)
+        if netAmount > 0 {
+            snapshot.sections.append(UsageSection(
+                title: "Spend",
+                fraction: nil,
+                leading: "This month: \(Format.currency(netAmount))",
+                trailing: nil
+            ))
+        }
         if snapshot.sections.isEmpty {
             snapshot.note = "Signed in as \(login). No metered Copilot usage reported this month yet."
         }

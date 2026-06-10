@@ -18,10 +18,7 @@ struct CodexProvider: UsageProviding {
         guard case let .oauth(token, accountID) = request.credential else {
             // auth.json held an API key, not a ChatGPT login — session limits
             // aren't available without the subscription token.
-            var snapshot = UsageSnapshot()
-            snapshot.planName = "Codex CLI"
-            snapshot.note = "Codex is using an API key. Sign in with a ChatGPT plan (`codex`) to see session limits."
-            return snapshot
+            return .notice(plan: "Codex CLI", "Codex is using an API key. Sign in with a ChatGPT plan (`codex`) to see session limits.")
         }
 
         var snapshot = UsageSnapshot()

@@ -7,7 +7,7 @@ struct MenuContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ProviderTabBar(selected: $store.selected, store: store)
+            ProviderTabBar()
 
             Divider()
 

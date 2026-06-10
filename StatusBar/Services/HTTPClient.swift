@@ -71,11 +71,6 @@ struct JSON {
         JSON((value as? [String: Any])?[key])
     }
 
-    subscript(index: Int) -> JSON {
-        guard let array = value as? [Any], array.indices.contains(index) else { return JSON(nil) }
-        return JSON(array[index])
-    }
-
     var array: [JSON] {
         (value as? [Any])?.map(JSON.init) ?? []
     }

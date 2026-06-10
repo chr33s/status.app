@@ -16,10 +16,7 @@ struct GeminiProvider: UsageProviding {
 
     func fetch(_ request: ProviderRequest) async throws -> UsageSnapshot {
         guard case let .oauth(token, _) = request.credential else {
-            var snapshot = UsageSnapshot()
-            snapshot.planName = "Gemini CLI"
-            snapshot.note = "Gemini is using an API key, which has no quota endpoint. Sign in with Google (`gemini`) to see limits."
-            return snapshot
+            return .notice(plan: "Gemini CLI", "Gemini is using an API key, which has no quota endpoint. Sign in with Google (`gemini`) to see limits.")
         }
 
         let body = try JSONSerialization.data(withJSONObject: [
@@ -71,6 +68,7 @@ struct GeminiProvider: UsageProviding {
                 if dict["remainingFraction"] != nil || dict["remaining_fraction"] != nil
                     || (dict["modelId"] != nil && dict["remainingAmount"] != nil) {
                     result.append(JSON(dict))
+                    return // a matched bucket isn't itself a container of more buckets
                 }
                 for nested in dict.values { walk(nested) }
             } else if let array = value as? [Any] {

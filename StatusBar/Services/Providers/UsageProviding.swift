@@ -9,13 +9,6 @@ enum Credential: Sendable {
     /// A local API key found in a CLI's config (e.g. Codex `OPENAI_API_KEY`,
     /// Gemini `GEMINI_API_KEY`). No subscription limits are available for these.
     case apiKey(String)
-
-    var token: String {
-        switch self {
-        case .oauth(let token, _): return token
-        case .apiKey(let value): return value
-        }
-    }
 }
 
 /// Inputs required to fetch usage for one provider.

@@ -30,15 +30,6 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         }
     }
 
-    var vendor: String {
-        switch self {
-        case .codex: return "OpenAI"
-        case .claude: return "Anthropic"
-        case .gemini: return "Google"
-        case .copilot: return "GitHub"
-        }
-    }
-
     var systemImage: String {
         switch self {
         case .codex: return "curlybraces"
