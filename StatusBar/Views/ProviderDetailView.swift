@@ -9,10 +9,20 @@ struct ProviderDetailView: View {
         VStack(alignment: .leading, spacing: 16) {
             switch state {
             case .notConfigured:
-                notConfigured
+                reauthPrompt(
+                    subtitle: "Not signed in",
+                    message: "No \(provider.cliName) login found. \(provider.cliSignInHint)",
+                    buttonTitle: "Sign in with \(provider.cliName)"
+                )
             case .loading:
                 header(plan: nil, subtitle: "Updating…")
                 ProgressView().controlSize(.small)
+            case .needsReauth(let message):
+                reauthPrompt(
+                    subtitle: "Session expired",
+                    message: message,
+                    buttonTitle: "Re-authenticate"
+                )
             case .failed(let message):
                 header(plan: nil, subtitle: "Couldn't update")
                 Text(message)
@@ -29,26 +39,20 @@ struct ProviderDetailView: View {
 
     // MARK: States
 
-    private var notConfigured: some View {
+    private func reauthPrompt(subtitle: String, message: String, buttonTitle: String) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            header(plan: nil, subtitle: "Not configured")
-            switch provider.authMode {
-            case .localCLI:
-                Text("No \(provider.cliName ?? "CLI") login found. \(provider.cliSignInHint)")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            case .apiKey:
-                Text("Add a read-only \(provider.vendor) API key to start tracking \(provider.fullName) usage.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                SettingsLink {
-                    Label("Add API key…", systemImage: "key.fill")
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(provider.accentColor)
+            header(plan: nil, subtitle: subtitle)
+            Text(message)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                Reauth.start(provider)
+            } label: {
+                Label(buttonTitle, systemImage: "person.badge.key")
             }
+            .buttonStyle(.borderedProminent)
+            .tint(provider.accentColor)
         }
     }
 

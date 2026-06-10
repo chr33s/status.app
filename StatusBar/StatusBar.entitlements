@@ -5,9 +5,9 @@
 	<!--
 	  App Sandbox is intentionally DISABLED.
 
-	  Showing real Claude Code / Codex session limits requires reading those
-	  CLIs' existing logins — the "Claude Code-credentials" Keychain item and
-	  files under ~/.codex and ~/.claude. The sandbox confines an app to its own
+	  Every provider reads the login of its CLI — the "Claude Code-credentials"
+	  Keychain item and files under ~/.codex, ~/.claude, ~/.gemini, and
+	  ~/.config (gh / github-copilot). The sandbox confines an app to its own
 	  container and keychain group, so those can't be read while sandboxed. This
 	  app therefore ships non-sandboxed (not App Store distributable), like the
 	  CLIs it reads. Hardened Runtime remains enabled for notarization.

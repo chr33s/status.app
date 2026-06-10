@@ -26,7 +26,7 @@ struct ProviderTabBar: View {
                     Image(systemName: provider.systemImage)
                         .font(.system(size: 15, weight: .medium))
                         .frame(width: 34, height: 26)
-                    if case .failed = store.state(for: provider) {
+                    if showsWarningDot(for: provider) {
                         Circle()
                             .fill(.red)
                             .frame(width: 6, height: 6)
@@ -47,5 +47,13 @@ struct ProviderTabBar: View {
             .opacity(store.state(for: provider).isConfigured ? 1 : 0.45)
         }
         .buttonStyle(.plain)
+    }
+
+    /// Red dot for a configured provider whose token needs attention.
+    private func showsWarningDot(for provider: Provider) -> Bool {
+        switch store.state(for: provider) {
+        case .needsReauth, .failed: return true
+        default: return false
+        }
     }
 }

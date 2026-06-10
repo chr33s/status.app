@@ -16,9 +16,8 @@ final class UsageStore: ObservableObject {
 
     init() {
         for provider in Provider.allCases {
-            states[provider] = Self.isConfigured(provider) ? .loading : .notConfigured
+            states[provider] = LocalCredentials.exists(provider) ? .loading : .notConfigured
         }
-        // Open on the first configured provider, if any.
         if let firstConfigured = Provider.allCases.first(where: { states[$0]?.isConfigured == true }) {
             selected = firstConfigured
         }
@@ -44,7 +43,7 @@ final class UsageStore: ObservableObject {
     }
 
     func refresh(_ provider: Provider) async {
-        guard let credential = await Self.credential(for: provider) else {
+        guard let credential = await LocalCredentials.freshCredential(provider) else {
             states[provider] = .notConfigured
             return
         }
@@ -52,55 +51,34 @@ final class UsageStore: ObservableObject {
 
         let impl = ProviderFactory.make(provider)
         do {
-            states[provider] = .loaded(try await fetch(provider, impl, credential))
-        } catch let error as ProviderError where error.isUnauthorized && provider.authMode == .localCLI {
-            // Token likely expired — force a refresh and retry once.
+            states[provider] = .loaded(try await fetch(impl, credential))
+        } catch let error as ProviderError where error.isUnauthorized {
+            // Token expired/invalid: try one forced refresh + retry, else prompt re-auth.
             if let refreshed = await LocalCredentials.forceRefresh(provider) {
                 do {
-                    states[provider] = .loaded(try await fetch(provider, impl, refreshed))
+                    states[provider] = .loaded(try await fetch(impl, refreshed))
+                } catch let retry as ProviderError where retry.isUnauthorized {
+                    states[provider] = .needsReauth(reauthMessage(provider))
                 } catch {
                     states[provider] = .failed(error.localizedDescription)
                 }
             } else {
-                states[provider] = .failed(error.localizedDescription)
+                states[provider] = .needsReauth(reauthMessage(provider))
             }
         } catch {
             states[provider] = .failed(error.localizedDescription)
         }
     }
 
-    private func fetch(_ provider: Provider, _ impl: UsageProviding, _ credential: Credential) async throws -> UsageSnapshot {
-        let request = ProviderRequest(
-            credential: credential,
-            identifier: settings.identifier(for: provider),
-            monthlyBudget: settings.budget(for: provider)
-        )
-        return try await impl.fetch(request)
+    private func fetch(_ impl: UsageProviding, _ credential: Credential) async throws -> UsageSnapshot {
+        try await impl.fetch(ProviderRequest(credential: credential))
     }
 
-    // MARK: Credential resolution
-
-    /// Resolves the credential for a provider: a local CLI login for Claude /
-    /// Codex (refreshing if expired), or a Keychain-stored API key for
-    /// Gemini / Copilot.
-    static func credential(for provider: Provider) async -> Credential? {
-        switch provider.authMode {
-        case .localCLI:
-            return await LocalCredentials.freshCredential(provider)
-        case .apiKey:
-            guard let key = Keychain.get(account: provider.keychainAccount), !key.isEmpty else { return nil }
-            return .apiKey(key)
-        }
+    private func reauthMessage(_ provider: Provider) -> String {
+        "Your \(provider.cliName) session has expired or is invalid. Re-authenticate to continue."
     }
 
-    static func isConfigured(_ provider: Provider) -> Bool {
-        switch provider.authMode {
-        case .localCLI: return LocalCredentials.exists(provider)
-        case .apiKey: return Keychain.hasSecret(account: provider.keychainAccount)
-        }
-    }
-
-    /// Called by the settings UI after a key is added/removed.
+    /// Called by the settings UI / re-check actions.
     func reload(_ provider: Provider) {
         Task { await refresh(provider) }
     }

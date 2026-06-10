@@ -1,23 +1,25 @@
 import Foundation
 
-/// GitHub Copilot usage via the enhanced billing platform.
-/// Requires a fine-grained token with read-only "Plan" / billing access.
+/// GitHub Copilot usage via the **GitHub CLI** login (`gh` / Copilot plugin
+/// OAuth token) — no API key.
 ///
 /// Endpoints used (read-only):
-///   • GET /user                                          — resolve login if not provided
-///   • GET /users/{login}/settings/billing/usage          — metered usage items
+///   • GET /user                                 — resolve login if not known
+///   • GET /users/{login}/settings/billing/usage — metered usage items
 struct CopilotProvider: UsageProviding {
     private let api = "https://api.github.com"
 
     func fetch(_ request: ProviderRequest) async throws -> UsageSnapshot {
+        guard case let .oauth(token, accountID) = request.credential else {
+            throw ProviderError.missingConfiguration("No GitHub CLI login found.")
+        }
         let headers = [
-            "Authorization": "Bearer \(request.credential.token)",
+            "Authorization": "Bearer \(token)",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         ]
 
-        // Resolve the username if the user didn't provide one.
-        var login = request.identifier
+        var login = accountID ?? ""
         if login.isEmpty {
             let me = JSON(try await HTTPClient.getJSON(URL(string: "\(api)/user")!, headers: headers))
             guard let resolved = me["login"].string else {
@@ -35,7 +37,6 @@ struct CopilotProvider: UsageProviding {
         ]
         let json = JSON(try await HTTPClient.getJSON(comps.url!, headers: headers))
 
-        // Filter the metered items down to Copilot.
         var requests = 0.0
         var grossAmount = 0.0
         var discount = 0.0
@@ -50,18 +51,7 @@ struct CopilotProvider: UsageProviding {
 
         var snapshot = UsageSnapshot()
         snapshot.planName = login
-
-        // Premium request meter. If a budget (allowance) is configured, show the
-        // fill against it; otherwise just report the count.
-        if let allowance = request.monthlyBudget, allowance > 0 {
-            let fraction = min(max(requests / allowance, 0), 1)
-            snapshot.sections.append(UsageSection(
-                title: "Premium requests",
-                fraction: fraction,
-                leading: "\(Int(requests)) / \(Int(allowance)) requests",
-                trailing: Format.percentUsed(fraction)
-            ))
-        } else if requests > 0 {
+        if requests > 0 {
             snapshot.sections.append(UsageSection(
                 title: "Premium requests",
                 fraction: nil,
@@ -69,15 +59,9 @@ struct CopilotProvider: UsageProviding {
                 trailing: nil
             ))
         }
-
-        snapshot.cost = CostInfo(
-            todayAmount: nil,
-            todayTokens: nil,
-            last30Amount: netAmount,
-            last30Tokens: nil
-        )
+        snapshot.cost = CostInfo(todayAmount: nil, todayTokens: nil, last30Amount: netAmount, last30Tokens: nil)
         if snapshot.sections.isEmpty {
-            snapshot.note = "No metered Copilot usage reported for this month yet."
+            snapshot.note = "Signed in as \(login). No metered Copilot usage reported this month yet."
         }
         return snapshot
     }

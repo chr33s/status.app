@@ -8,28 +8,28 @@ subscription usage at a glance for:
 - **Gemini** — Google
 - **GitHub Copilot** — GitHub
 
-- **Claude** and **Codex** reuse your existing **CLI login** (Claude Code /
-  Codex CLI) to show real subscription **session** and **weekly** limits — no
-  key to enter.
-- **Gemini** and **Copilot** use a **read-only API key** stored in the macOS
-  Keychain.
-
-Nothing leaves your Mac except requests to each provider's own API.
+**No API keys.** Every provider reuses the login of its existing CLI (Claude
+Code, Codex, Gemini, GitHub). Nothing is entered by hand and nothing leaves your
+Mac except requests to each provider's own API.
 
 ## Features
 
 - Lives entirely in the menu bar (`LSUIElement`), no Dock icon, no windows.
 - Tabbed strip to switch between providers; the selected tab is tinted with the
-  provider's brand colour.
-- Per-provider detail: usage meters, an optional **Extra usage** budget meter,
-  and a **Cost** summary (today + last 30 days, spend and tokens).
-- Quick actions: Refresh, Add Account, Usage Dashboard, Status Page, Settings,
-  About, Quit.
+  provider's brand colour. A red dot marks a provider needing attention.
+- Per-provider detail: usage meters (Session / Weekly / per-model quota) and a
+  **Cost** summary where the provider exposes one.
+- **Automatic token refresh** — expired OAuth tokens are refreshed via the CLI's
+  client and written back so the CLI stays in sync.
+- **Re-authenticate prompt** — when a token is expired/invalid and can't be
+  refreshed (or you're not signed in), the app shows a button that launches the
+  CLI's login flow in Terminal.
+- Quick actions: Refresh, Usage Dashboard, Status Page, Settings, Quit.
 - Configurable auto-refresh interval, optional menu-bar usage badge, and
   launch-at-login (via `SMAppService`).
-- Hardened Runtime enabled. **App Sandbox is disabled** — reading the Claude
-  Code / Codex CLI logins (a Keychain item and files under `~/.codex` /
-  `~/.claude`) isn't possible from within the sandbox, so the app ships
+- Hardened Runtime enabled. **App Sandbox is disabled** — reading the CLIs'
+  logins (a Keychain item and files under `~/.codex`, `~/.claude`, `~/.gemini`,
+  `~/.config`) isn't possible from within the sandbox, so the app ships
   non-sandboxed (not App Store distributable), like the CLIs it reads.
 
 ## Requirements
@@ -45,58 +45,55 @@ open StatusBar.xcodeproj
 ```
 
 Select the **StatusBar** scheme and Run (⌘R). Set your signing **Team** under
-*Signing & Capabilities* on first build (required for Keychain + sandbox).
-
-You can also build from the command line:
+*Signing & Capabilities* on first build.
 
 ```sh
 xcodebuild -project StatusBar.xcodeproj -scheme StatusBar -configuration Release build
 ```
 
-## Configuration
+## How it gets usage
 
-| Provider | Auth | Usage source |
-|----------|------|--------------|
-| Claude | **Claude Code login** (read automatically) | OAuth probe → `anthropic-ratelimit-unified-*` headers → Session (5h) / Weekly (7d) meters |
-| Codex | **Codex CLI login** (read automatically) | ChatGPT OAuth → `rate_limits.primary` / `.secondary` windows |
-| Gemini (Google) | AI Studio API key | `GET /v1beta/models` (connectivity); usage lives in Cloud billing |
-| GitHub Copilot | Fine-grained token, read-only billing | `GET /users/{login}/settings/billing/usage` |
+Sign into each CLI once and the app picks it up automatically:
 
-- **Claude / Codex** need no setup beyond being signed into the respective CLI
-  (`claude` / `codex`). The app reads:
-  - Claude — the `Claude Code-credentials` Keychain item, or
-    `~/.claude/.credentials.json`.
-  - Codex — `~/.codex/auth.json`.
+| Provider | CLI | Credential read | Usage source |
+|----------|-----|-----------------|--------------|
+| Claude | Claude Code (`claude`) | `Claude Code-credentials` Keychain item, or `~/.claude/.credentials.json` | OAuth probe → `anthropic-ratelimit-unified-*` headers → Session (5h) / Weekly (7d) |
+| Codex | Codex CLI (`codex login`) | `~/.codex/auth.json` | ChatGPT OAuth → streamed `rate_limits.primary` / `.secondary` |
+| Gemini | Gemini CLI (`gemini`) | `~/.gemini/oauth_creds.json` | Code Assist `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota` → per-model quota |
+| Copilot | GitHub CLI (`gh auth login`) | `~/.config/github-copilot/apps.json` or `~/.config/gh/hosts.yml` | `GET /users/{login}/settings/billing/usage` |
 
-  When an OAuth access token is expired (detected from its stored expiry / JWT
-  `exp`) — or a request returns 401 — the app refreshes it via the CLI's OAuth
-  client and **writes the rotated token back** to the same store so the CLI stays
-  in sync. See the caveat below.
-- **Gemini / Copilot** — open **Settings… → Providers** and paste a read-only
-  key. Optional identifier (Cloud project / GitHub username, auto-detected) and
-  monthly budget (drives the *Extra usage* meter).
+If a CLI is configured with a plain API key instead of an OAuth login
+(`OPENAI_API_KEY` in `auth.json`, `GEMINI_API_KEY` in `~/.gemini/.env`/env), the
+app uses it where it can but notes that subscription limits aren't available.
 
-### Caveats on the CLI session limits
+## Token refresh & re-authentication
 
-The subscription **session-limit** surfaces for Claude and Codex are not public,
-documented APIs — the app reads the same data the CLIs themselves use. The exact
-endpoints, headers, and response shapes are therefore **best-effort** and may
-shift between CLI releases. They're each isolated in one place
-(`ClaudeProvider` / `CodexProvider`, with the `rate_limits` parsing in
-`SessionUsage`) so they're easy to adjust, and the app degrades to a friendly
-"signed in — limits unavailable" note rather than failing. Verify behaviour on
-your Mac and tweak the endpoint constants if a CLI update changes them.
+- When an OAuth access token is expired (from its stored expiry / JWT `exp`) — or
+  a request returns 401 — the app refreshes it via the CLI's OAuth client and
+  **writes the rotated token back** to the same store.
+- If the refresh fails (no/invalid refresh token), the provider switches to a
+  **“session expired — re-authenticate”** state with a button that opens Terminal
+  running the CLI's login command (`claude`, `codex login`, `gemini`,
+  `gh auth login --web`). The same button appears when you're not signed in.
 
-**Token refresh / write-back.** Refreshing a rotating OAuth token and writing it
-back into another tool's store (`LocalCredentials`) keeps the CLI consistent,
-but the OAuth client ids, token endpoints, and stored JSON shapes are observed
-rather than documented. If a refresh-token rotation isn't persisted correctly it
-could log the corresponding CLI out. Refresh only runs when a token is actually
-expired (or after a 401), writes back atomically, and falls back to the existing
-token on failure — but please confirm it behaves on your Mac before relying on it.
+### Caveats — please verify on your Mac
 
-The Gemini / Copilot API fetchers parse responses defensively via the `JSON`
-helper rather than rigid Codable models, so minor schema changes are tolerated.
+These surfaces are **undocumented**; the app reads the same data the CLIs use,
+but exact endpoints, OAuth client ids, and JSON shapes are observed and may shift
+between CLI releases. Each is isolated for easy adjustment:
+
+- Claude / Codex session limits — `ClaudeProvider` / `CodexProvider` + `SessionUsage`.
+- Gemini quota — `GeminiProvider` (`v1internal:retrieveUserQuota`; a full bucket
+  may omit `remainingAmount`/`remainingFraction`, treated as 0% used).
+- OAuth clients / token endpoints / write-back — `LocalCredentials`. Writing a
+  rotated refresh token back into another tool's store keeps the CLI consistent,
+  but if a rotation isn't persisted correctly it could log that CLI out. Refresh
+  runs only when a token is actually expired (or after a 401), writes atomically,
+  and falls back to the existing token on failure.
+
+Responses are parsed defensively via the `JSON` helper rather than rigid Codable
+models, so minor schema changes are tolerated; otherwise the tab degrades to a
+friendly note instead of failing.
 
 ## Project layout
 
@@ -105,8 +102,8 @@ StatusBar/
 ├─ StatusBarApp.swift          # @main, MenuBarExtra + Settings scenes
 ├─ Models/                     # Provider, Usage, LoadState
 ├─ Services/
-│  ├─ Keychain.swift           # read-only API-key storage (Gemini/Copilot)
-│  ├─ LocalCredentials.swift   # reads Claude Code / Codex CLI logins
+│  ├─ LocalCredentials.swift   # reads/refreshes the four CLIs' logins
+│  ├─ Reauth.swift             # launches a CLI login in Terminal
 │  ├─ HTTPClient.swift         # async requests + JSON/header navigation
 │  ├─ AppSettings.swift        # non-secret prefs (UserDefaults)
 │  ├─ UsageStore.swift         # state, credential resolution, scheduling

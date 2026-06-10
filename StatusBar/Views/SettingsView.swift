@@ -5,7 +5,7 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             ProvidersSettingsView()
-                .tabItem { Label("Providers", systemImage: "key.fill") }
+                .tabItem { Label("Providers", systemImage: "person.badge.key") }
             GeneralSettingsView()
                 .tabItem { Label("General", systemImage: "gearshape") }
         }
@@ -16,13 +16,15 @@ struct SettingsView: View {
 // MARK: - Providers
 
 struct ProvidersSettingsView: View {
+    @EnvironmentObject private var store: UsageStore
+
     var body: some View {
         ScrollView {
-            VStack(spacing: 16) {
+            VStack(spacing: 12) {
                 ForEach(Provider.allCases) { provider in
-                    ProviderKeyCard(provider: provider)
+                    ProviderStatusCard(provider: provider, state: store.state(for: provider))
                 }
-                Text("Keys are stored in your macOS Keychain and used read-only. They never leave your Mac except in requests to the provider's own API.")
+                Text("Usage is read from each tool's existing CLI login — no API keys are stored. Tokens are refreshed automatically; if one can't be refreshed you'll be prompted to re-authenticate.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -34,137 +36,59 @@ struct ProvidersSettingsView: View {
     }
 }
 
-struct ProviderKeyCard: View {
+struct ProviderStatusCard: View {
     let provider: Provider
+    let state: LoadState
     @EnvironmentObject private var store: UsageStore
-    @EnvironmentObject private var settings: AppSettings
-
-    @State private var key: String = ""
-    @State private var identifier: String = ""
-    @State private var budgetText: String = ""
-    @State private var saved = false
 
     var body: some View {
         GroupBox {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 8) {
-                    Image(systemName: provider.systemImage)
-                        .foregroundStyle(provider.accentColor)
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: provider.systemImage)
+                    .font(.title3)
+                    .foregroundStyle(provider.accentColor)
+                    .frame(width: 24)
+
+                VStack(alignment: .leading, spacing: 3) {
                     Text(provider.fullName).font(.headline)
-                    Spacer()
-                    statusBadge
+                    statusLine
                 }
 
-                switch provider.authMode {
-                case .localCLI:
-                    localCLIBody
-                case .apiKey:
-                    apiKeyBody
+                Spacer()
+
+                VStack(spacing: 6) {
+                    if state.needsAttention {
+                        Button("Re-authenticate") { Reauth.start(provider) }
+                            .buttonStyle(.borderedProminent)
+                            .tint(provider.accentColor)
+                    }
+                    Button("Re-check") { store.reload(provider) }
+                        .controlSize(.small)
                 }
             }
             .padding(6)
         }
-        .onAppear(perform: load)
     }
 
     @ViewBuilder
-    private var statusBadge: some View {
-        switch provider.authMode {
-        case .localCLI:
-            if LocalCredentials.exists(provider) {
-                Label("Detected", systemImage: "checkmark.circle.fill")
-                    .font(.caption).foregroundStyle(.green)
-            } else {
-                Label("Not found", systemImage: "exclamationmark.circle")
-                    .font(.caption).foregroundStyle(.orange)
-            }
-        case .apiKey:
-            if Keychain.hasSecret(account: provider.keychainAccount) {
-                Label("Saved", systemImage: "checkmark.circle.fill")
-                    .font(.caption).foregroundStyle(.green)
-            }
-        }
-    }
-
-    // Local CLI providers (Claude Code / Codex): no key entry.
-    @ViewBuilder
-    private var localCLIBody: some View {
-        if LocalCredentials.exists(provider) {
-            Text("Using your \(provider.cliName ?? "CLI") login. No API key needed.")
+    private var statusLine: some View {
+        switch state {
+        case .loaded:
+            Label("Connected via \(provider.cliName)", systemImage: "checkmark.circle.fill")
+                .font(.caption).foregroundStyle(.green)
+        case .loading:
+            Text("Checking \(provider.cliName)…").font(.caption).foregroundStyle(.secondary)
+        case .notConfigured:
+            Text("Not signed in. \(provider.cliSignInHint)")
                 .font(.caption).foregroundStyle(.secondary)
-        } else {
-            Text(provider.cliSignInHint)
-                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        case .needsReauth:
+            Label("Session expired — re-authenticate", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption).foregroundStyle(.orange)
+        case .failed(let message):
+            Text(message).font(.caption).foregroundStyle(.secondary)
+                .lineLimit(2).fixedSize(horizontal: false, vertical: true)
         }
-
-        HStack {
-            Button("Re-check") { store.reload(provider) }
-                .buttonStyle(.borderedProminent)
-                .tint(provider.accentColor)
-            Spacer()
-        }
-    }
-
-    // API-key providers (Gemini / Copilot).
-    @ViewBuilder
-    private var apiKeyBody: some View {
-        SecureField("API key", text: $key)
-            .textFieldStyle(.roundedBorder)
-        Text(provider.keyHelp)
-            .font(.caption).foregroundStyle(.secondary)
-
-        TextField(provider.identifierLabel, text: $identifier)
-            .textFieldStyle(.roundedBorder)
-
-        TextField("Monthly budget in USD (optional)", text: $budgetText)
-            .textFieldStyle(.roundedBorder)
-
-        HStack {
-            Button("Save") { save() }
-                .buttonStyle(.borderedProminent)
-                .tint(provider.accentColor)
-            Button("Remove") { remove() }
-                .disabled(!Keychain.hasSecret(account: provider.keychainAccount))
-            Spacer()
-            if saved { Text("Saved").font(.caption).foregroundStyle(.secondary) }
-        }
-    }
-
-    private func load() {
-        key = Keychain.get(account: provider.keychainAccount) ?? ""
-        identifier = settings.identifier(for: provider)
-        if let budget = settings.budget(for: provider) {
-            budgetText = String(format: "%g", budget)
-        }
-    }
-
-    private func save() {
-        let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        do {
-            if trimmedKey.isEmpty {
-                try Keychain.remove(account: provider.keychainAccount)
-            } else {
-                try Keychain.set(trimmedKey, account: provider.keychainAccount)
-            }
-        } catch {
-            NSLog("Keychain save failed: \(error.localizedDescription)")
-        }
-        settings.setIdentifier(identifier, for: provider)
-        settings.setBudget(Double(budgetText.replacingOccurrences(of: ",", with: ".")), for: provider)
-        store.reload(provider)
-        flashSaved()
-    }
-
-    private func remove() {
-        try? Keychain.remove(account: provider.keychainAccount)
-        key = ""
-        store.reload(provider)
-        flashSaved()
-    }
-
-    private func flashSaved() {
-        saved = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { saved = false }
     }
 }
 

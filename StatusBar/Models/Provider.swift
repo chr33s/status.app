@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// The AI subscriptions tracked by the app.
+/// The AI subscriptions tracked by the app. Each reuses the login of its
+/// corresponding CLI — there are no API keys to enter.
 ///
 /// The order here drives the order of the tab strip at the top of the menu.
 enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
@@ -11,38 +12,6 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
 
     var id: String { rawValue }
 
-    /// How the provider is authenticated.
-    ///
-    /// - `localCLI`: read the existing login of the corresponding CLI
-    ///   (Claude Code / Codex) — no key entry, real session limits.
-    /// - `apiKey`: a read-only key the user pastes, stored in the Keychain.
-    enum AuthMode: Sendable { case localCLI, apiKey }
-
-    var authMode: AuthMode {
-        switch self {
-        case .claude, .codex: return .localCLI
-        case .gemini, .copilot: return .apiKey
-        }
-    }
-
-    /// Name of the CLI whose login is reused (for `localCLI` providers).
-    var cliName: String? {
-        switch self {
-        case .claude: return "Claude Code"
-        case .codex: return "Codex CLI"
-        default: return nil
-        }
-    }
-
-    /// Hint shown when a CLI login can't be found.
-    var cliSignInHint: String {
-        switch self {
-        case .claude: return "Install Claude Code and run `claude` to sign in."
-        case .codex: return "Install the Codex CLI and run `codex` to sign in."
-        default: return ""
-        }
-    }
-
     var displayName: String {
         switch self {
         case .codex: return "Codex"
@@ -52,7 +21,6 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         }
     }
 
-    /// Long form shown in the detail header / settings.
     var fullName: String {
         switch self {
         case .codex: return "OpenAI Codex"
@@ -71,7 +39,6 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         }
     }
 
-    /// SF Symbol used in the tab strip and rows.
     var systemImage: String {
         switch self {
         case .codex: return "curlybraces"
@@ -90,14 +57,41 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         }
     }
 
-    /// Stable identifier used as the Keychain account name for the secret.
-    var keychainAccount: String { "secret.\(rawValue)" }
+    /// Name of the CLI whose login is reused.
+    var cliName: String {
+        switch self {
+        case .codex: return "Codex CLI"
+        case .claude: return "Claude Code"
+        case .gemini: return "Gemini CLI"
+        case .copilot: return "GitHub CLI"
+        }
+    }
+
+    /// Hint shown when no CLI login is found.
+    var cliSignInHint: String {
+        switch self {
+        case .codex: return "Install the Codex CLI and run `codex login` to sign in."
+        case .claude: return "Install Claude Code and run `claude` to sign in."
+        case .gemini: return "Install the Gemini CLI and run `gemini` (Login with Google)."
+        case .copilot: return "Install the GitHub CLI and run `gh auth login` to sign in."
+        }
+    }
+
+    /// Command run in Terminal to (re)authenticate the CLI.
+    var reauthCommand: String {
+        switch self {
+        case .codex: return "codex login"
+        case .claude: return "claude"
+        case .gemini: return "gemini"
+        case .copilot: return "gh auth login --web"
+        }
+    }
 
     /// Where to send the user to view detailed usage in a browser.
     var dashboardURL: URL {
         switch self {
         case .codex: return URL(string: "https://platform.openai.com/usage")!
-        case .claude: return URL(string: "https://console.anthropic.com/usage")!
+        case .claude: return URL(string: "https://claude.ai/settings/usage")!
         case .gemini: return URL(string: "https://aistudio.google.com/usage")!
         case .copilot: return URL(string: "https://github.com/settings/billing")!
         }
@@ -110,30 +104,6 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         case .claude: return URL(string: "https://status.anthropic.com")!
         case .gemini: return URL(string: "https://status.cloud.google.com")!
         case .copilot: return URL(string: "https://www.githubstatus.com")!
-        }
-    }
-
-    /// Help text describing the kind of key the provider expects.
-    var keyHelp: String {
-        switch self {
-        case .codex:
-            return "OpenAI Admin API key (sk-admin-…). Read-only; used for the organization usage & costs endpoints."
-        case .claude:
-            return "Anthropic Admin API key (sk-ant-admin…). Read-only; used for the organization usage & cost reports."
-        case .gemini:
-            return "Google AI Studio API key. Used to validate connectivity; usage figures require Cloud billing."
-        case .copilot:
-            return "GitHub fine-grained token with read-only \"Plan\" / billing access."
-        }
-    }
-
-    /// Label for the optional, non-secret secondary identifier field.
-    var identifierLabel: String {
-        switch self {
-        case .codex: return "Organization ID (optional)"
-        case .claude: return "Organization ID (optional)"
-        case .gemini: return "Cloud project ID (optional)"
-        case .copilot: return "GitHub username (optional — auto-detected)"
         }
     }
 }
