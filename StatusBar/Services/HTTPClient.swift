@@ -21,11 +21,16 @@ enum HTTPClient {
     }
 
     /// General request returning the body, headers, and status.
+    /// - Parameter failOnError: When true (default), throws `ProviderError.http`
+    ///   on non-2xx responses. Pass `false` to inspect headers / body of a
+    ///   failed response (used by Codex, whose `x-codex-*` rate-limit headers
+    ///   are emitted even on 4xx).
     static func send(
         _ url: URL,
         method: String = "GET",
         headers: [String: String] = [:],
-        body: Data? = nil
+        body: Data? = nil,
+        failOnError: Bool = true
     ) async throws -> HTTPResult {
         var request = URLRequest(url: url)
         request.httpMethod = method
@@ -48,7 +53,7 @@ enum HTTPClient {
             }
         }
 
-        guard (200..<300).contains(http.statusCode) else {
+        if failOnError, !(200..<300).contains(http.statusCode) {
             let text = String(data: data, encoding: .utf8).map { String($0.prefix(280)) } ?? ""
             throw ProviderError.http(status: http.statusCode, body: text)
         }

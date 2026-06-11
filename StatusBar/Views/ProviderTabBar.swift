@@ -3,7 +3,7 @@ import SwiftUI
 /// Horizontal strip of provider chips at the top of the menu. The selected chip
 /// is filled with its accent colour.
 struct ProviderTabBar: View {
-    @EnvironmentObject private var store: UsageStore
+    @Environment(UsageStore.self) private var store
 
     var body: some View {
         HStack(spacing: 4) {
@@ -22,8 +22,11 @@ struct ProviderTabBar: View {
         } label: {
             VStack(spacing: 4) {
                 ZStack(alignment: .topTrailing) {
-                    Image(systemName: provider.systemImage)
-                        .font(.system(size: 15, weight: .medium))
+                    Image(provider.assetIcon)
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 18, height: 18)
                         .frame(width: 34, height: 26)
                     if showsWarningDot(for: provider) {
                         Circle()
@@ -43,6 +46,7 @@ struct ProviderTabBar: View {
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
                     .fill(isSelected ? provider.accentColor : Color.clear)
             }
+            .contentShape(Rectangle())
             .opacity(store.state(for: provider).isConfigured ? 1 : 0.45)
         }
         .buttonStyle(.plain)

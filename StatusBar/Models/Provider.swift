@@ -9,6 +9,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
     case claude
     case gemini
     case copilot
+    case grok
 
     var id: String { rawValue }
 
@@ -18,6 +19,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         case .claude: return "Claude"
         case .gemini: return "Gemini"
         case .copilot: return "Copilot"
+        case .grok: return "Grok"
         }
     }
 
@@ -27,6 +29,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         case .claude: return "Claude"
         case .gemini: return "Gemini"
         case .copilot: return "GitHub Copilot"
+        case .grok: return "xAI Grok"
         }
     }
 
@@ -36,6 +39,19 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         case .claude: return "sparkles"
         case .gemini: return "diamond.fill"
         case .copilot: return "cpu"
+        case .grok: return "x.circle.fill"
+        }
+    }
+
+    /// Brand glyph from `Assets.xcassets/icons`. Rendered as a template so the
+    /// view's foreground style controls the colour.
+    var assetIcon: String {
+        switch self {
+        case .codex: return "openai"
+        case .claude: return "claude"
+        case .gemini: return "gemini"
+        case .copilot: return "copilot"
+        case .grok: return "grok"
         }
     }
 
@@ -45,6 +61,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         case .claude: return Color(red: 0.85, green: 0.46, blue: 0.30)  // Anthropic clay
         case .gemini: return Color(red: 0.26, green: 0.52, blue: 0.96)  // Google blue
         case .copilot: return Color(red: 0.45, green: 0.45, blue: 0.50) // GitHub graphite
+        case .grok: return Color(red: 0.20, green: 0.20, blue: 0.22)    // xAI near-black
         }
     }
 
@@ -54,7 +71,8 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         case .codex: return "Codex CLI"
         case .claude: return "Claude Code"
         case .gemini: return "Gemini CLI"
-        case .copilot: return "GitHub CLI"
+        case .copilot: return "Copilot CLI"
+        case .grok: return "Grok CLI"
         }
     }
 
@@ -64,7 +82,8 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         case .codex: return "Install the Codex CLI and run `codex login` to sign in."
         case .claude: return "Install Claude Code and run `claude` to sign in."
         case .gemini: return "Install the Gemini CLI and run `gemini` (Login with Google)."
-        case .copilot: return "Install the GitHub CLI and run `gh auth login` to sign in."
+        case .copilot: return "Install the Copilot CLI and run `copilot login` to sign in."
+        case .grok: return "Install the Grok CLI and run `grok login`, or set XAI_API_KEY in your shell."
         }
     }
 
@@ -72,9 +91,10 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
     var reauthCommand: String {
         switch self {
         case .codex: return "codex login"
-        case .claude: return "claude"
+        case .claude: return "claude auth login"
         case .gemini: return "gemini"
-        case .copilot: return "gh auth login --web"
+        case .copilot: return "copilot login"
+        case .grok: return "grok login"
         }
     }
 
@@ -85,6 +105,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         case .claude: return URL(string: "https://claude.ai/settings/usage")!
         case .gemini: return URL(string: "https://aistudio.google.com/usage")!
         case .copilot: return URL(string: "https://github.com/settings/billing")!
+        case .grok: return URL(string: "https://console.x.ai/team/default/usage")!
         }
     }
 
@@ -95,6 +116,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         case .claude: return URL(string: "https://status.anthropic.com")!
         case .gemini: return URL(string: "https://status.cloud.google.com")!
         case .copilot: return URL(string: "https://www.githubstatus.com")!
+        case .grok: return URL(string: "https://status.x.ai")!
         }
     }
 }

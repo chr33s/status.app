@@ -2,10 +2,22 @@ import SwiftUI
 
 /// Root popover content: tab strip, provider detail, and the action menu.
 struct MenuContentView: View {
-    @EnvironmentObject private var store: UsageStore
+    @Environment(UsageStore.self) private var store
     @Environment(\.openURL) private var openURL
+    @State private var showingSettings = false
 
     var body: some View {
+        Group {
+            if showingSettings {
+                settingsScreen
+            } else {
+                mainScreen
+            }
+        }
+        .frame(width: 320)
+    }
+
+    private var mainScreen: some View {
         VStack(spacing: 0) {
             ProviderTabBar()
 
@@ -24,7 +36,32 @@ struct MenuContentView: View {
             Divider()
             footer
         }
-        .frame(width: 320)
+    }
+
+    private var settingsScreen: some View {
+        VStack(spacing: 0) {
+            ZStack {
+                Text("Settings").font(.headline)
+                HStack {
+                    Button {
+                        showingSettings = false
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "chevron.left")
+                            Text("Back")
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+
+            Divider()
+            SettingsView()
+        }
     }
 
     // MARK: Action menu
@@ -34,10 +71,10 @@ struct MenuContentView: View {
             MenuRow(title: "Refresh", systemImage: "arrow.clockwise") {
                 Task { await store.refreshAll() }
             }
-            MenuRow(title: "Usage Dashboard", systemImage: "chart.bar.doc.horizontal") {
+            MenuRow(title: "Usage", systemImage: "chart.bar.doc.horizontal") {
                 openURL(store.selected.dashboardURL)
             }
-            MenuRow(title: "Status Page", systemImage: "waveform.path.ecg") {
+            MenuRow(title: "Status", systemImage: "waveform.path.ecg") {
                 openURL(store.selected.statusURL)
             }
         }
@@ -48,11 +85,9 @@ struct MenuContentView: View {
 
     private var footer: some View {
         VStack(spacing: 0) {
-            SettingsLink {
-                MenuRowLabel(title: "Settings…", systemImage: "gearshape")
+            MenuRow(title: "Settings…", systemImage: "gearshape") {
+                showingSettings = true
             }
-            .buttonStyle(.plain)
-
             MenuRow(title: "Quit", systemImage: "power") {
                 NSApplication.shared.terminate(nil)
             }

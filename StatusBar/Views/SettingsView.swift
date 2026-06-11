@@ -2,28 +2,48 @@ import AppKit
 import ServiceManagement
 import SwiftUI
 
-struct SettingsView: View {
-    var body: some View {
-        TabView {
-            ProvidersSettingsView()
-                .tabItem { Label("Providers", systemImage: "person.badge.key") }
-            TelemetrySettingsView()
-                .tabItem { Label("Telemetry", systemImage: "antenna.radiowaves.left.and.right") }
-            GeneralSettingsView()
-                .tabItem { Label("General", systemImage: "gearshape") }
+private enum SettingsTab: String, CaseIterable, Identifiable {
+    case providers, telemetry, general
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .providers: return "Providers"
+        case .telemetry: return "Telemetry"
+        case .general: return "General"
         }
-        .frame(width: 480)
+    }
+}
+
+struct SettingsView: View {
+    @State private var tab: SettingsTab = .providers
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("", selection: $tab) {
+                ForEach(SettingsTab.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+
+            switch tab {
+            case .providers: ProvidersSettingsView()
+            case .telemetry: TelemetrySettingsView()
+            case .general:   GeneralSettingsView()
+            }
+        }
     }
 }
 
 // MARK: - Providers
 
 struct ProvidersSettingsView: View {
-    @EnvironmentObject private var store: UsageStore
+    @Environment(UsageStore.self) private var store
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 12) {
+            VStack(spacing: 10) {
                 ForEach(Provider.allCases) { provider in
                     ProviderStatusCard(provider: provider, state: store.state(for: provider))
                 }
@@ -33,7 +53,7 @@ struct ProvidersSettingsView: View {
                     .multilineTextAlignment(.center)
                     .padding(.top, 4)
             }
-            .padding(20)
+            .padding(12)
         }
         .frame(height: 460)
     }
@@ -42,28 +62,30 @@ struct ProvidersSettingsView: View {
 struct ProviderStatusCard: View {
     let provider: Provider
     let state: LoadState
-    @EnvironmentObject private var store: UsageStore
+    @Environment(UsageStore.self) private var store
 
     var body: some View {
         GroupBox {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: provider.systemImage)
-                    .font(.title3)
-                    .foregroundStyle(provider.accentColor)
-                    .frame(width: 24)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(provider.fullName).font(.headline)
-                    statusLine
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 10) {
+                    Image(systemName: provider.systemImage)
+                        .font(.title3)
+                        .foregroundStyle(provider.accentColor)
+                        .frame(width: 22)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(provider.fullName).font(.headline)
+                        statusLine
+                    }
+                    Spacer(minLength: 0)
                 }
 
-                Spacer()
-
-                VStack(spacing: 6) {
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
                     if state.needsAttention {
                         Button("Re-authenticate") { Reauth.start(provider) }
                             .buttonStyle(.borderedProminent)
                             .tint(provider.accentColor)
+                            .controlSize(.small)
                     }
                     Button("Re-check") { store.reload(provider) }
                         .controlSize(.small)
@@ -98,21 +120,23 @@ struct ProviderStatusCard: View {
 // MARK: - Telemetry
 
 struct TelemetrySettingsView: View {
-    @EnvironmentObject private var telemetry: TelemetryStore
-    @EnvironmentObject private var settings: AppSettings
+    @Environment(TelemetryStore.self) private var telemetry
+    @Environment(AppSettings.self) private var settings
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 8) {
                     Circle().fill(telemetry.isRunning ? .green : .red).frame(width: 8, height: 8)
                     Text(telemetry.isRunning
-                         ? "Collector running on \(telemetry.endpoint)"
+                         ? "Collector on \(telemetry.endpoint)"
                          : "Collector not running")
                         .font(.callout)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
 
-                Toggle("Automatically configure Claude & Gemini", isOn: Binding(
+                Toggle("Auto-configure Claude & Gemini", isOn: Binding(
                     get: { settings.telemetryAutoConfigured },
                     set: { on in
                         settings.telemetryAutoConfigured = on
@@ -127,9 +151,9 @@ struct TelemetrySettingsView: View {
                     TelemetryProviderRow(provider: provider, endpoint: telemetry.endpoint)
                 }
             }
-            .padding(20)
+            .padding(12)
         }
-        .frame(height: 480)
+        .frame(height: 460)
     }
 }
 
@@ -158,12 +182,14 @@ struct TelemetryProviderRow: View {
 
                 if let manual = OTelSetup.manualSnippet(provider, endpoint: endpoint) {
                     Text("Add to \(manual.file):").font(.caption).foregroundStyle(.secondary)
-                    Text(manual.snippet)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .padding(8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        Text(manual.snippet)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(8)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
                     Button("Copy") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(manual.snippet, forType: .string)
@@ -179,10 +205,11 @@ struct TelemetryProviderRow: View {
 // MARK: - General
 
 struct GeneralSettingsView: View {
-    @EnvironmentObject private var store: UsageStore
-    @EnvironmentObject private var settings: AppSettings
+    @Environment(UsageStore.self) private var store
+    @Environment(AppSettings.self) private var settings
 
     var body: some View {
+        @Bindable var settings = settings
         Form {
             Section {
                 Picker("Refresh every", selection: $settings.refreshMinutes) {
@@ -214,6 +241,7 @@ struct GeneralSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
         .frame(height: 460)
     }
 }

@@ -1,44 +1,109 @@
 import Foundation
+import os
+
+private let log = Logger(subsystem: "app.statusbar", category: "provider.gemini")
 
 /// Gemini usage via the **Gemini CLI** Google login (OAuth) — no API key.
 ///
-/// Mirrors how the Gemini CLI's `/stats model` quota is sourced: it calls the
-/// Code Assist internal endpoint `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota`
-/// with the user's OAuth token and reads per-model quota buckets
-/// (`remainingFraction` / reset time).
+/// Mirrors how the Gemini CLI's `/stats model` quota is sourced: two calls
+/// against the Code Assist internal API:
+///  1. `loadCodeAssist` to resolve the user's `cloudaicompanionProject`
+///  2. `retrieveUserQuota` with that project ID, returning per-model quota
+///     buckets (`remainingFraction` / reset time).
 ///
 /// ── Verify on a real Mac ──
-/// This is a `v1internal` (undocumented) endpoint; the request body and bucket
-/// field names are parsed defensively and isolated here. When a bucket is full
+/// These are `v1internal` (undocumented) endpoints; request shapes are pulled
+/// from the gemini-cli sources and isolated here. Free-tier accounts may not
+/// have a `cloudaicompanionProject` — we honor `GOOGLE_CLOUD_PROJECT` as a
+/// fallback, otherwise show a friendly "signed in" note. When a bucket is full
 /// the API may omit `remainingAmount`/`remainingFraction`, which we treat as 0% used.
 struct GeminiProvider: UsageProviding {
-    private let endpoint = URL(string: "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota")!
+    private let base = URL(string: "https://cloudcode-pa.googleapis.com")!
+    private var loadURL: URL { base.appendingPathComponent("v1internal:loadCodeAssist") }
+    private var quotaURL: URL { base.appendingPathComponent("v1internal:retrieveUserQuota") }
 
     func fetch(_ request: ProviderRequest) async throws -> UsageSnapshot {
-        guard case let .oauth(token, _) = request.credential else {
+        guard case let .oauth(token, _, displayName) = request.credential else {
+            log.notice("no OAuth credential (API key only)")
             return .notice(plan: "Gemini CLI", "Gemini is using an API key, which has no quota endpoint. Sign in with Google (`gemini`) to see limits.")
         }
 
-        let body = try JSONSerialization.data(withJSONObject: [
-            "metadata": ["pluginType": "GEMINI", "platform": "DARWIN"],
-        ])
-        let result = try await HTTPClient.send(
-            endpoint, method: "POST",
-            headers: ["Authorization": "Bearer \(token)", "Content-Type": "application/json"],
-            body: body
-        )
-
         var snapshot = UsageSnapshot()
-        snapshot.planName = "Gemini CLI"
+        snapshot.planName = displayName ?? "Gemini CLI"
+
+        guard let project = try await resolveProject(token: token) else {
+            log.notice("no cloudaicompanionProject and no GOOGLE_CLOUD_PROJECT env var")
+            snapshot.note = "Signed in via Gemini CLI. No Cloud project is linked to this account, so per-model quota isn't available."
+            return snapshot
+        }
+
+        log.debug("retrieveUserQuota project=\(project, privacy: .public)")
+        let quotaBody = try JSONSerialization.data(withJSONObject: ["project": project])
+        let result: HTTPResult
+        do {
+            result = try await HTTPClient.send(
+                quotaURL, method: "POST",
+                headers: authHeaders(token),
+                body: quotaBody
+            )
+        } catch {
+            log.error("retrieveUserQuota failed: \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
         for bucket in Self.quotaBuckets(in: result.json.value) {
             if let section = section(from: bucket) {
                 snapshot.sections.append(section)
             }
         }
+        log.info("loaded \(snapshot.sections.count) quota bucket(s)")
         if snapshot.sections.isEmpty {
             snapshot.note = "Signed in via Gemini CLI. No per-model quota was returned for this account."
         }
         return snapshot
+    }
+
+    /// Calls `loadCodeAssist` to discover the Cloud project linked to the user,
+    /// falling back to `GOOGLE_CLOUD_PROJECT` (matching the CLI's behavior).
+    ///
+    /// `metadata.platform` / `metadata.ideType` are server-side enums; the
+    /// gemini-cli sends the `*_UNSPECIFIED` values, so we do the same to avoid
+    /// `INVALID_ARGUMENT` on enum mismatches.
+    private func resolveProject(token: String) async throws -> String? {
+        let body = try JSONSerialization.data(withJSONObject: [
+            "metadata": [
+                "ideType": "IDE_UNSPECIFIED",
+                "platform": "PLATFORM_UNSPECIFIED",
+                "pluginType": "GEMINI",
+            ],
+        ])
+        log.debug("loadCodeAssist")
+        let result: HTTPResult
+        do {
+            result = try await HTTPClient.send(
+                loadURL, method: "POST",
+                headers: authHeaders(token),
+                body: body
+            )
+        } catch {
+            log.error("loadCodeAssist failed: \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
+        if let project = result.json["cloudaicompanionProject"].string, !project.isEmpty {
+            log.debug("resolved project from loadCodeAssist")
+            return project
+        }
+        let env = ProcessInfo.processInfo.environment
+        for key in ["GOOGLE_CLOUD_PROJECT", "GEMINI_PROJECT"] {
+            if let value = env[key], !value.isEmpty {
+                log.debug("resolved project from env \(key, privacy: .public)")
+                return value
+            }
+        }
+        return nil
+    }
+
+    private func authHeaders(_ token: String) -> [String: String] {
+        ["Authorization": "Bearer \(token)", "Content-Type": "application/json"]
     }
 
     private func section(from bucket: JSON) -> UsageSection? {

@@ -1,21 +1,21 @@
 import SwiftUI
 
 /// Thin rounded progress bar used for every usage meter.
+///
+/// Uses `scaleEffect` rather than `GeometryReader` so swapping the detail panel
+/// between providers doesn't force a measured layout pass per meter.
 struct UsageMeter: View {
     var fraction: Double
     var tint: Color
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(Color.primary.opacity(0.08))
-                Capsule()
-                    .fill(tint)
-                    .frame(width: max(3, geo.size.width * clamped))
-            }
+        ZStack(alignment: .leading) {
+            Rectangle().fill(Color.primary.opacity(0.08))
+            Rectangle().fill(tint)
+                .scaleEffect(x: clamped, y: 1, anchor: .leading)
         }
         .frame(height: 5)
+        .clipShape(Capsule())
         .accessibilityValue("\(Int((clamped * 100).rounded())) percent")
     }
 

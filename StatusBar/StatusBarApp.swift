@@ -3,30 +3,23 @@ import SwiftUI
 @main
 struct StatusBarApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var store = UsageStore()
-    @StateObject private var settings = AppSettings.shared
-    @StateObject private var telemetry = TelemetryStore()
+    @State private var store = UsageStore()
+    @State private var settings = AppSettings.shared
+    @State private var telemetry = TelemetryStore()
 
     var body: some Scene {
         MenuBarExtra {
             MenuContentView()
-                .environmentObject(store)
-                .environmentObject(settings)
-                .environmentObject(telemetry)
+                .environment(store)
+                .environment(settings)
+                .environment(telemetry)
         } label: {
             MenuBarLabel()
-                .environmentObject(store)
-                .environmentObject(settings)
-                .environmentObject(telemetry)
+                .environment(store)
+                .environment(settings)
+                .environment(telemetry)
         }
         .menuBarExtraStyle(.window)
-
-        Settings {
-            SettingsView()
-                .environmentObject(store)
-                .environmentObject(settings)
-                .environmentObject(telemetry)
-        }
     }
 }
 

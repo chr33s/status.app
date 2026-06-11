@@ -2,17 +2,23 @@ import Foundation
 import SwiftUI
 
 /// Owns per-provider load state, the selected tab, and the refresh schedule.
+///
+/// Uses `@Observable` so views only invalidate when properties they actually
+/// read change — `MenuBarLabel` (reads `peakFraction`) stays put while you
+/// click between tabs, avoiding the status-bar IPC churn that otherwise queues
+/// up across rapid clicks.
 @MainActor
-final class UsageStore: ObservableObject {
-    @Published private(set) var states: [Provider: LoadState] = [:]
-    @Published private(set) var lastRefresh: Date?
-    @Published private(set) var isRefreshing = false
-    @Published var selected: Provider = .codex
+@Observable
+final class UsageStore {
+    private(set) var states: [Provider: LoadState] = [:]
+    private(set) var lastRefresh: Date?
+    private(set) var isRefreshing = false
+    var selected: Provider = .codex
 
-    private let settings = AppSettings.shared
-    private var timer: Timer?
-    private var didStart = false
-    private var didAutoSelect = false
+    @ObservationIgnored private let settings = AppSettings.shared
+    @ObservationIgnored private var timer: Timer?
+    @ObservationIgnored private var didStart = false
+    @ObservationIgnored private var didAutoSelect = false
 
     init() {
         // Seed as loading without touching the Keychain/disk on the main thread;

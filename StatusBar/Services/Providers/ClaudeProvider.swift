@@ -1,90 +1,105 @@
 import Foundation
+import os
+
+private let log = Logger(subsystem: "app.statusbar", category: "provider.claude")
 
 /// Claude subscription session limits, read using the **Claude Code** login
 /// (OAuth) — no API key required.
 ///
-/// Approach: issue a free `POST /v1/messages/count_tokens` probe with the OAuth
-/// bearer token. Anthropic returns the account's unified rate-limit state in the
-/// response headers, which we map to the "Session" (5h) and "Weekly" (7d) meters
-/// shown in the menu.
+/// Approach: issue a minimal `POST /v1/messages` probe (`max_tokens: 1`) with
+/// the OAuth bearer token. Anthropic returns the account's unified rate-limit
+/// state in the response headers, which we map to the "Session" (5h) and
+/// "Weekly" (7d) meters shown in the menu.
 ///
 /// ── Verify on a real Mac ──
-/// The unified-limit header names below are based on Anthropic's observed
-/// `anthropic-ratelimit-unified-*` headers and may evolve. They are isolated
-/// here so they're trivial to adjust. If none are present we fall back to the
-/// standard request/token rate-limit headers.
+/// The Claude Code OAuth tokens are scoped to `/v1/messages` only — other
+/// endpoints return 404 — and the `oauth-2025-04-20` beta requires the Claude
+/// Code identity in the system prompt plus the CLI fingerprint headers below.
+/// The unified-limit header names now follow the
+/// `anthropic-ratelimit-unified-{5h,7d}-{status,utilization,reset}` shape
+/// (utilization is a 0-1 fraction, not a token count). If none are present we
+/// fall back to the standard request/token rate-limit headers.
 struct ClaudeProvider: UsageProviding {
-    private let endpoint = URL(string: "https://api.anthropic.com/v1/messages/count_tokens")!
-    private let probeModel = "claude-3-5-haiku-20241022"
+    private let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
+    /// Haiku 4.5 — the cheapest model the OAuth path currently accepts.
+    /// Older dated Haiku 3.5 IDs return `not_found_error` (404) on OAuth.
+    private let probeModel = "claude-haiku-4-5"
+    /// The first system block MUST start with this exact string; Anthropic's
+    /// OAuth allow-list keys off it.
+    private let probeSystem = "You are Claude Code, Anthropic's official CLI for Claude."
 
     func fetch(_ request: ProviderRequest) async throws -> UsageSnapshot {
-        guard case let .oauth(token, _) = request.credential else {
+        guard case let .oauth(token, _, displayName) = request.credential else {
+            log.error("missing OAuth credential")
             throw ProviderError.missingConfiguration("No Claude Code login found.")
         }
 
+        // CLI fingerprint — the OAuth path is gated on these headers in
+        // addition to the bearer token.
         let headers = [
             "Authorization": "Bearer \(token)",
             "anthropic-version": "2023-06-01",
-            "anthropic-beta": "oauth-2025-04-20",
+            "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14",
+            "user-agent": "claude-cli/2.1.119 (external, cli)",
+            "x-app": "cli",
+            "anthropic-dangerous-direct-browser-access": "true",
             "Content-Type": "application/json",
         ]
         let body = try JSONSerialization.data(withJSONObject: [
             "model": probeModel,
+            "max_tokens": 1,
+            "system": [["type": "text", "text": probeSystem]],
             "messages": [["role": "user", "content": "ping"]],
         ])
 
-        let result = try await HTTPClient.send(endpoint, method: "POST", headers: headers, body: body)
+        log.debug("probing \(endpoint.absoluteString, privacy: .public)")
+        let result: HTTPResult
+        do {
+            result = try await HTTPClient.send(endpoint, method: "POST", headers: headers, body: body)
+        } catch {
+            log.error("probe failed: \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
+        log.debug("probe ok status=\(result.status)")
 
         var snapshot = UsageSnapshot()
-        snapshot.planName = "Claude Code"
+        snapshot.planName = displayName ?? "Claude Code"
 
-        // 5-hour session window.
-        if let session = SessionUsage.limitSection(
+        // 5-hour session window — `utilization` is a 0-1 fraction.
+        if let session = SessionUsage.utilizationSection(
             title: "Session",
-            limit: number(result, "anthropic-ratelimit-unified-5h-limit"),
-            remaining: number(result, "anthropic-ratelimit-unified-5h-remaining"),
+            utilization: number(result, "anthropic-ratelimit-unified-5h-utilization"),
             reset: result.header("anthropic-ratelimit-unified-5h-reset")
         ) {
             snapshot.sections.append(session)
         }
 
         // 7-day weekly window.
-        if let weekly = SessionUsage.limitSection(
+        if let weekly = SessionUsage.utilizationSection(
             title: "Weekly",
-            limit: number(result, "anthropic-ratelimit-unified-7d-limit"),
-            remaining: number(result, "anthropic-ratelimit-unified-7d-remaining"),
+            utilization: number(result, "anthropic-ratelimit-unified-7d-utilization"),
             reset: result.header("anthropic-ratelimit-unified-7d-reset")
         ) {
             snapshot.sections.append(weekly)
         }
 
-        // Opus-specific weekly window (shown by Claude for Max plans).
-        if let opus = SessionUsage.limitSection(
-            title: "Opus (Weekly)",
-            limit: number(result, "anthropic-ratelimit-unified-7d-opus-limit"),
-            remaining: number(result, "anthropic-ratelimit-unified-7d-opus-remaining"),
-            reset: result.header("anthropic-ratelimit-unified-7d-opus-reset")
-        ) {
-            snapshot.sections.append(opus)
-        }
-
-        // Fallback: generic unified or standard request limits.
+        // Fallback: legacy request/token rate-limit headers (API-key callers).
         if snapshot.sections.isEmpty,
            let generic = SessionUsage.limitSection(
                title: "Rate limit",
-               limit: number(result, "anthropic-ratelimit-unified-limit")
-                   ?? number(result, "anthropic-ratelimit-requests-limit"),
-               remaining: number(result, "anthropic-ratelimit-unified-remaining")
-                   ?? number(result, "anthropic-ratelimit-requests-remaining"),
-               reset: result.header("anthropic-ratelimit-unified-reset")
-                   ?? result.header("anthropic-ratelimit-requests-reset")
+               limit: number(result, "anthropic-ratelimit-requests-limit"),
+               remaining: number(result, "anthropic-ratelimit-requests-remaining"),
+               reset: result.header("anthropic-ratelimit-requests-reset")
            ) {
             snapshot.sections.append(generic)
         }
 
         if snapshot.sections.isEmpty {
             let status = result.header("anthropic-ratelimit-unified-status") ?? "active"
+            log.notice("no rate-limit headers returned (status=\(status, privacy: .public))")
             snapshot.note = "Signed in via Claude Code (status: \(status)). The API didn't return subscription window limits on this request."
+        } else {
+            log.info("loaded \(snapshot.sections.count) section(s)")
         }
         return snapshot
     }

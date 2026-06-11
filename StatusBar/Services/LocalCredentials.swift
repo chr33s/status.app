@@ -22,6 +22,7 @@ enum LocalCredentials {
     private static let geminiClientID = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
     private static let geminiClientSecret = "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"
     private static let geminiTokenURL = URL(string: "https://oauth2.googleapis.com/token")!
+    private static let grokTokenURL = URL(string: "https://auth.x.ai/oauth2/token")!
 
     private static var home: URL { FileManager.default.homeDirectoryForCurrentUser }
 
@@ -35,7 +36,7 @@ enum LocalCredentials {
     static func credential(for provider: Provider) async -> Credential? {
         guard let loaded = load(provider) else { return nil }
         if let key = loaded.apiKey { return .apiKey(key) }
-        return .oauth(accessToken: loaded.access, accountID: loaded.accountID)
+        return .oauth(accessToken: loaded.access, accountID: loaded.accountID, displayName: loaded.displayName)
     }
 
     /// Exchanges the refresh token for a new access token and writes it back to
@@ -43,17 +44,19 @@ enum LocalCredentials {
     static func forceRefresh(_ provider: Provider) async -> Credential? {
         guard let loaded = load(provider), loaded.refresh != nil,
               let refreshed = try? await refresh(loaded) else { return nil }
-        return .oauth(accessToken: refreshed.access, accountID: refreshed.accountID)
+        return .oauth(accessToken: refreshed.access, accountID: refreshed.accountID, displayName: refreshed.displayName)
     }
 
     // MARK: Loaded credential
 
-    private enum Source { case claudeKeychain, claudeFile, codexFile, geminiFile, copilotConfig }
+    private enum Source { case claudeKeychain, claudeFile, codexFile, geminiFile, copilotConfig, grokFile }
 
     private struct Loaded {
         var access: String
         var refresh: String?
         var accountID: String?
+        /// User-facing label shown in the tab header.
+        var displayName: String?
         var source: Source
         /// Set when the CLI is configured with a plain API key rather than OAuth.
         var apiKey: String?
@@ -67,6 +70,7 @@ enum LocalCredentials {
         case .codex: return loadCodex()
         case .gemini: return loadGemini()
         case .copilot: return loadCopilot()
+        case .grok: return loadGrok()
         }
     }
 
@@ -88,8 +92,12 @@ enum LocalCredentials {
         let oauth = root["claudeAiOauth"]
         guard let access = oauth["accessToken"].string ?? root["accessToken"].string,
               !access.isEmpty else { return nil }
+        // Claude Code creds don't carry an email — surface the subscription
+        // tier instead (e.g. "Claude Max", "Claude Team").
+        let display = oauth["subscriptionType"].string.map { "Claude \($0.capitalized)" }
         return Loaded(access: access, refresh: oauth["refreshToken"].string,
-                      accountID: nil, source: source, apiKey: nil, raw: raw)
+                      accountID: nil, displayName: display,
+                      source: source, apiKey: nil, raw: raw)
     }
 
     private static func claudeKeychainJSON() -> [String: Any]? {
@@ -112,12 +120,17 @@ enum LocalCredentials {
         guard let raw = readJSONObject(file) else { return nil }
         let root = JSON(raw)
         if let access = root["tokens"]["access_token"].string, !access.isEmpty {
+            // Codex needs the opaque `account_id` UUID at request time (sent
+            // as the `chatgpt-account-id` header), but we display the ChatGPT
+            // account email parsed from `id_token`.
+            let email = root["tokens"]["id_token"].string.flatMap(emailFromIDToken(_:))
             return Loaded(access: access, refresh: root["tokens"]["refresh_token"].string,
                           accountID: root["tokens"]["account_id"].string,
+                          displayName: email,
                           source: .codexFile, apiKey: nil, raw: raw)
         }
         if let key = root["OPENAI_API_KEY"].string, !key.isEmpty {
-            return Loaded(access: "", refresh: nil, accountID: nil,
+            return Loaded(access: "", refresh: nil, accountID: nil, displayName: nil,
                           source: .codexFile, apiKey: key, raw: raw)
         }
         return nil
@@ -130,15 +143,31 @@ enum LocalCredentials {
         if let raw = readJSONObject(file) {
             let root = JSON(raw)
             if let access = root["access_token"].string, !access.isEmpty {
+                let email = root["id_token"].string.flatMap(emailFromIDToken(_:))
                 return Loaded(access: access, refresh: root["refresh_token"].string,
-                              accountID: nil, source: .geminiFile, apiKey: nil, raw: raw)
+                              accountID: nil, displayName: email,
+                              source: .geminiFile, apiKey: nil, raw: raw)
             }
         }
         if let key = geminiAPIKey() {
-            return Loaded(access: "", refresh: nil, accountID: nil,
+            return Loaded(access: "", refresh: nil, accountID: nil, displayName: nil,
                           source: .geminiFile, apiKey: key, raw: [:])
         }
         return nil
+    }
+
+    /// Decodes an OAuth `id_token` JWT and returns the `email` claim if present.
+    /// Used to surface the signed-in account in the UI.
+    private static func emailFromIDToken(_ token: String) -> String? {
+        let parts = token.split(separator: ".")
+        guard parts.count >= 2 else { return nil }
+        var payload = String(parts[1]).replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        payload.append(String(repeating: "=", count: (4 - payload.count % 4) % 4))
+        guard let data = Data(base64Encoded: payload),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return json["email"] as? String
     }
 
     private static func geminiAPIKey() -> String? {
@@ -157,6 +186,45 @@ enum LocalCredentials {
         return nil
     }
 
+    // MARK: Grok CLI (xAI)
+
+    /// xAI's Grok CLI stores an OIDC login in `~/.grok/auth.json` keyed by
+    /// `<issuer>::<client_id>`. Each entry carries the access JWT (`key`), a
+    /// refresh token, and the signed-in email/team. We also accept a plain
+    /// `XAI_API_KEY` / `GROK_API_KEY` env var so non-CLI users can sign in.
+    private static func loadGrok() -> Loaded? {
+        let file = home.appendingPathComponent(".grok/auth.json")
+        if let raw = readJSONObject(file), let (_, entry) = grokOIDCEntry(in: raw) {
+            let json = JSON(entry)
+            if let access = json["key"].string, !access.isEmpty {
+                return Loaded(
+                    access: access,
+                    refresh: json["refresh_token"].string,
+                    accountID: json["team_id"].string,
+                    displayName: json["email"].string,
+                    source: .grokFile, apiKey: nil, raw: raw
+                )
+            }
+        }
+        let env = ProcessInfo.processInfo.environment
+        for name in ["XAI_API_KEY", "GROK_API_KEY"] {
+            if let value = env[name], !value.isEmpty {
+                return Loaded(access: "", refresh: nil, accountID: nil, displayName: nil,
+                              source: .grokFile, apiKey: value, raw: [:])
+            }
+        }
+        return nil
+    }
+
+    /// First entry in `auth.json` that looks like a Grok OIDC login (key
+    /// namespaced under `auth.x.ai`).
+    private static func grokOIDCEntry(in raw: [String: Any]) -> (String, [String: Any])? {
+        for (key, value) in raw where key.contains("auth.x.ai") {
+            if let entry = value as? [String: Any] { return (key, entry) }
+        }
+        return nil
+    }
+
     // MARK: GitHub CLI / Copilot
 
     private static func loadCopilot() -> Loaded? {
@@ -167,15 +235,18 @@ enum LocalCredentials {
                 for (key, value) in raw where key.contains("github.com") {
                     let entry = JSON(value)
                     if let token = entry["oauth_token"].string, !token.isEmpty {
+                        let user = entry["user"].string
                         return Loaded(access: token, refresh: nil,
-                                      accountID: entry["user"].string, source: .copilotConfig, apiKey: nil, raw: [:])
+                                      accountID: user, displayName: user,
+                                      source: .copilotConfig, apiKey: nil, raw: [:])
                     }
                 }
             }
         }
         if let (token, user) = ghHostsToken() {
             return Loaded(access: token, refresh: nil,
-                          accountID: user, source: .copilotConfig, apiKey: nil, raw: [:])
+                          accountID: user, displayName: user,
+                          source: .copilotConfig, apiKey: nil, raw: [:])
         }
         return nil
     }
@@ -223,6 +294,8 @@ enum LocalCredentials {
             return try await refreshCodex(loaded, refreshToken: refreshToken)
         case .geminiFile:
             return try await refreshGemini(loaded, refreshToken: refreshToken)
+        case .grokFile:
+            return try await refreshGrok(loaded, refreshToken: refreshToken)
         case .copilotConfig:
             return loaded
         }
@@ -271,6 +344,38 @@ enum LocalCredentials {
         return updated
     }
 
+    private static func refreshGrok(_ loaded: Loaded, refreshToken: String) async throws -> Loaded {
+        guard let (entryKey, entry) = grokOIDCEntry(in: loaded.raw) else { return loaded }
+        // `oidc_client_id` is stored alongside; fall back to the suffix of the
+        // entry key (`<issuer>::<client_id>`) if it's somehow missing.
+        let clientID = JSON(entry)["oidc_client_id"].string
+            ?? String(entryKey.split(separator: ":").last ?? "")
+        let form = [
+            "grant_type": "refresh_token",
+            "refresh_token": refreshToken,
+            "client_id": clientID,
+        ].map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) ?? $0.value)" }
+            .joined(separator: "&")
+        let result = try await HTTPClient.send(grokTokenURL, method: "POST",
+            headers: ["Content-Type": "application/x-www-form-urlencoded"], body: Data(form.utf8))
+        guard let access = result.json["access_token"].string else { return loaded }
+
+        var updated = loaded
+        updated.access = access
+        updated.refresh = result.json["refresh_token"].string ?? loaded.refresh
+        var newEntry = entry
+        newEntry["key"] = access
+        if let refresh = updated.refresh { newEntry["refresh_token"] = refresh }
+        if let expiresIn = result.json["expires_in"].double {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            newEntry["expires_at"] = formatter.string(from: Date().addingTimeInterval(expiresIn))
+        }
+        updated.raw[entryKey] = newEntry
+        persist(updated.raw, to: updated.source)
+        return updated
+    }
+
     private static func refreshGemini(_ loaded: Loaded, refreshToken: String) async throws -> Loaded {
         let form = [
             "client_id": geminiClientID,
@@ -296,7 +401,7 @@ enum LocalCredentials {
     // MARK: Write-back
 
     private static func persist(_ raw: [String: Any], to source: Source) {
-        let pretty = source == .codexFile || source == .geminiFile
+        let pretty = source == .codexFile || source == .geminiFile || source == .grokFile
         guard let data = try? JSONSerialization.data(
             withJSONObject: raw,
             options: pretty ? .prettyPrinted : []
@@ -314,6 +419,8 @@ enum LocalCredentials {
             try? data.write(to: home.appendingPathComponent(".codex/auth.json"), options: .atomic)
         case .geminiFile:
             try? data.write(to: home.appendingPathComponent(".gemini/oauth_creds.json"), options: .atomic)
+        case .grokFile:
+            try? data.write(to: home.appendingPathComponent(".grok/auth.json"), options: .atomic)
         case .copilotConfig:
             break
         }

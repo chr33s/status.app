@@ -3,9 +3,13 @@ import Foundation
 /// How a provider request is authenticated. Every credential is sourced from a
 /// local CLI login — never entered by hand.
 enum Credential: Sendable {
-    /// An OAuth access token reused from a CLI login, plus an optional account
-    /// id (Codex account / Copilot login).
-    case oauth(accessToken: String, accountID: String?)
+    /// An OAuth access token reused from a CLI login.
+    /// - `accountID` is an opaque identifier the provider needs at request time
+    ///   (Codex's ChatGPT account UUID, Copilot's GitHub login).
+    /// - `displayName` is the user-facing label shown in the tab header
+    ///   (email / login / plan tier). May equal `accountID` for providers
+    ///   where the latter is already human-readable.
+    case oauth(accessToken: String, accountID: String?, displayName: String?)
     /// A local API key found in a CLI's config (e.g. Codex `OPENAI_API_KEY`,
     /// Gemini `GEMINI_API_KEY`). No subscription limits are available for these.
     case apiKey(String)
@@ -28,6 +32,7 @@ enum ProviderFactory {
         case .claude: return ClaudeProvider()
         case .gemini: return GeminiProvider()
         case .copilot: return CopilotProvider()
+        case .grok: return GrokProvider()
         }
     }
 }

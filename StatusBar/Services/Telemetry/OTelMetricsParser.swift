@@ -36,6 +36,7 @@ enum OTelMetricsParser {
         if name.hasPrefix("gemini_cli.") { return .gemini }
         if name.hasPrefix("codex") { return .codex }
         if name.hasPrefix("copilot") { return .copilot }
+        if name.hasPrefix("grok") || name.hasPrefix("xai") { return .grok }
         return nil
     }
 

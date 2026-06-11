@@ -4,7 +4,6 @@ import SwiftUI
 struct ProviderDetailView: View {
     let provider: Provider
     let state: LoadState
-    @EnvironmentObject private var telemetry: TelemetryStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -34,49 +33,10 @@ struct ProviderDetailView: View {
                 loaded(snapshot)
             }
 
-            telemetryBlock
+            TelemetrySection(provider: provider)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-    }
-
-    /// Live usage streamed from the CLI over OpenTelemetry, shown under whatever
-    /// the probe returned.
-    @ViewBuilder
-    private var telemetryBlock: some View {
-        let usage = telemetry.usage(for: provider)
-        if usage.hasData {
-            Divider()
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Telemetry").font(.headline)
-                if usage.totalTokens > 0 {
-                    telemetryRow("Tokens", tokenSummary(usage))
-                }
-                if usage.cost > 0 {
-                    telemetryRow("Cost", Format.currency(usage.cost))
-                }
-                if usage.requests > 0 {
-                    telemetryRow("Requests", String(Int(usage.requests)))
-                }
-                Text("Live from \(provider.cliName) since launch")
-                    .font(.footnote).foregroundStyle(.tertiary)
-            }
-        }
-    }
-
-    private func telemetryRow(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label).foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            Text(value)
-        }
-        .font(.callout)
-    }
-
-    private func tokenSummary(_ usage: TelemetryUsage) -> String {
-        var parts = ["\(Format.compact(usage.inputTokens)) in", "\(Format.compact(usage.outputTokens)) out"]
-        if usage.cacheTokens > 0 { parts.append("\(Format.compact(usage.cacheTokens)) cache") }
-        return "\(Format.compact(usage.totalTokens)) · " + parts.joined(separator: " · ")
     }
 
     // MARK: States
@@ -119,13 +79,9 @@ struct ProviderDetailView: View {
 
     private func header(plan: String?, subtitle: String) -> some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(provider.fullName)
-                    .font(.title3.bold())
-                Text(subtitle)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
+            Text(subtitle)
+                .font(.callout)
+                .foregroundStyle(.secondary)
             Spacer()
             if let plan, !plan.isEmpty {
                 Text(plan)
@@ -133,5 +89,49 @@ struct ProviderDetailView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+/// Live usage streamed from the CLI over OpenTelemetry. Kept as its own view so
+/// the high-frequency telemetry updates only invalidate this block — not the
+/// whole detail panel with its meters.
+private struct TelemetrySection: View {
+    let provider: Provider
+    @Environment(TelemetryStore.self) private var telemetry
+
+    var body: some View {
+        let usage = telemetry.usage(for: provider)
+        if usage.hasData {
+            Divider()
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Telemetry").font(.headline)
+                if usage.totalTokens > 0 {
+                    row("Tokens", tokenSummary(usage))
+                }
+                if usage.cost > 0 {
+                    row("Cost", Format.currency(usage.cost))
+                }
+                if usage.requests > 0 {
+                    row("Requests", String(Int(usage.requests)))
+                }
+                Text("Live from \(provider.cliName) since launch")
+                    .font(.footnote).foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private func row(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label).foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(value)
+        }
+        .font(.callout)
+    }
+
+    private func tokenSummary(_ usage: TelemetryUsage) -> String {
+        var parts = ["\(Format.compact(usage.inputTokens)) in", "\(Format.compact(usage.outputTokens)) out"]
+        if usage.cacheTokens > 0 { parts.append("\(Format.compact(usage.cacheTokens)) cache") }
+        return "\(Format.compact(usage.totalTokens)) · " + parts.joined(separator: " · ")
     }
 }

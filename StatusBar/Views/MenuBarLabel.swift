@@ -3,9 +3,9 @@ import SwiftUI
 /// The status-item shown in the system menu bar. Starts the refresh schedule the
 /// first time it appears, and optionally shows the peak usage percentage.
 struct MenuBarLabel: View {
-    @EnvironmentObject private var store: UsageStore
-    @EnvironmentObject private var settings: AppSettings
-    @EnvironmentObject private var telemetry: TelemetryStore
+    @Environment(UsageStore.self) private var store
+    @Environment(AppSettings.self) private var settings
+    @Environment(TelemetryStore.self) private var telemetry
 
     var body: some View {
         Group {
