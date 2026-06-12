@@ -90,7 +90,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
     /// Command run in Terminal to (re)authenticate the CLI.
     var reauthCommand: String {
         switch self {
-        case .codex: return "codex login"
+        case .codex: return "codex login --device-auth"
         case .claude: return "claude auth login"
         case .gemini: return "gemini"
         case .copilot: return "copilot login"
