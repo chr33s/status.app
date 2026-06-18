@@ -41,7 +41,14 @@ enum LocalCredentials {
 
     /// Exchanges the refresh token for a new access token and writes it back to
     /// the CLI's store. Returns nil when there's no refresh token to use.
+    ///
+    /// Drops the in-memory Keychain cache first so an out-of-band rotation by
+    /// the Claude Code CLI is picked up here rather than wedging us on a stale
+    /// refresh token.
     static func forceRefresh(_ provider: Provider) async -> Credential? {
+        if provider == .claude {
+            keychainLock.withLock { cachedClaudeKeychain = nil }
+        }
         guard let loaded = load(provider), loaded.refresh != nil,
               let refreshed = try? await refresh(loaded) else { return nil }
         return .oauth(accessToken: refreshed.access, accountID: refreshed.accountID, displayName: refreshed.displayName)
@@ -100,7 +107,17 @@ enum LocalCredentials {
                       source: source, apiKey: nil, raw: raw)
     }
 
+    /// Serializes Keychain reads/writes so concurrent refreshes can't stack
+    /// permission prompts, and caches the decoded JSON so subsequent syncs
+    /// read from memory instead of re-prompting when the "Always Allow" ACL
+    /// fails to stick across builds.
+    private static let keychainLock = NSLock()
+    private static var cachedClaudeKeychain: [String: Any]?
+
     private static func claudeKeychainJSON() -> [String: Any]? {
+        keychainLock.lock()
+        defer { keychainLock.unlock() }
+        if let cached = cachedClaudeKeychain { return cached }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "Claude Code-credentials",
@@ -110,7 +127,9 @@ enum LocalCredentials {
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
               let data = item as? Data else { return nil }
-        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        cachedClaudeKeychain = json
+        return json
     }
 
     // MARK: Codex CLI
@@ -412,7 +431,10 @@ enum LocalCredentials {
                 kSecClass as String: kSecClassGenericPassword,
                 kSecAttrService as String: "Claude Code-credentials",
             ]
+            keychainLock.lock()
             SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+            cachedClaudeKeychain = raw
+            keychainLock.unlock()
         case .claudeFile:
             try? data.write(to: home.appendingPathComponent(".claude/.credentials.json"), options: .atomic)
         case .codexFile:
