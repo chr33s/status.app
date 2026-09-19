@@ -3,14 +3,38 @@
 <plist version="1.0">
 <dict>
 	<!--
-	  App Sandbox is intentionally DISABLED.
-
-	  Every provider reads the login of its CLI — the "Claude Code-credentials"
-	  Keychain item and files under ~/.codex, ~/.claude, ~/.gemini, and
-	  ~/.config (gh / github-copilot). The sandbox confines an app to its own
-	  container and keychain group, so those can't be read while sandboxed. This
-	  app therefore ships non-sandboxed (not App Store distributable), like the
-	  CLIs it reads. Hardened Runtime remains enabled for notarization.
+	  App Sandbox is enabled (required for App Store distribution), with
+	  temporary exceptions so each provider can read the login of its CLI:
+	  files under ~/.claude, ~/.codex, ~/.gemini, and ~/.grok (read-write —
+	  rotated tokens are written back on refresh) and ~/.config (gh /
+	  github-copilot, read-only). The "Claude Code-credentials" Keychain item
+	  is ACL-protected, so reading it prompts the user once for access.
+	  Network client is needed for the usage/OAuth HTTPS calls; network
+	  server for the local OTLP telemetry listener. The apple-events
+	  exception lets Reauth tell Terminal to run a CLI login command
+	  (a staged .command file would be quarantined by the sandbox and
+	  rejected by Gatekeeper as "damaged").
 	-->
+	<key>com.apple.security.temporary-exception.apple-events</key>
+	<array>
+		<string>com.apple.Terminal</string>
+	</array>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.security.network.server</key>
+	<true/>
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-write</key>
+	<array>
+		<string>/.claude/</string>
+		<string>/.codex/</string>
+		<string>/.gemini/</string>
+		<string>/.grok/</string>
+	</array>
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
+	<array>
+		<string>/.config/</string>
+	</array>
 </dict>
 </plist>

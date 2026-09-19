@@ -3,39 +3,30 @@ import AppKit
 /// Launches a provider's CLI login flow so the user can re-authenticate when a
 /// token is expired/invalid.
 ///
-/// CLIs have no real URL scheme, so this writes a tiny `.command` script that
-/// runs the login command and opens it with Terminal. (Using a script avoids
-/// needing Apple Events automation entitlements.)
+/// CLIs have no real URL scheme, so this tells Terminal to run the login
+/// command via Apple Events. A staged `.command` script can't be used now that
+/// the app is sandboxed: the sandbox quarantines every file the app writes,
+/// and Gatekeeper refuses to run quarantined unsigned scripts ("damaged").
+/// Automating Terminal instead requires the `temporary-exception.apple-events`
+/// entitlement plus `NSAppleEventsUsageDescription`, and macOS asks the user
+/// for consent on first use.
 enum Reauth {
     static func start(_ provider: Provider) {
-        let command = provider.reauthCommand
-        let script = """
-        #!/bin/zsh
-        clear
-        echo "Re-authenticating \(provider.fullName)…"
-        echo
-        \(command)
+        let command = "clear; echo 'Re-authenticating \(provider.fullName)…'; echo; \(provider.reauthCommand)"
+        let escaped = command
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let source = """
+        tell application "Terminal"
+            activate
+            do script "\(escaped)"
+        end tell
         """
-
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("reauth-\(provider.rawValue).command")
-        do {
-            try script.write(to: url, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
-        } catch {
-            // Fall back to the provider's dashboard if we can't stage the script.
+        var error: NSDictionary?
+        if NSAppleScript(source: source)?.executeAndReturnError(&error) == nil {
+            // Automation denied or Terminal unavailable — fall back to the
+            // provider's dashboard in the browser.
             _ = NSWorkspace.shared.open(provider.dashboardURL)
-            return
-        }
-
-        let terminal = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = true
-        NSWorkspace.shared.open([url], withApplicationAt: terminal, configuration: configuration) { _, error in
-            if error != nil {
-                // Older path or missing Terminal — fall back to a generic open.
-                _ = NSWorkspace.shared.open(url)
-            }
         }
     }
 }

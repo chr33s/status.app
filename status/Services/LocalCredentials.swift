@@ -6,7 +6,8 @@ import Security
 /// returns 401 the caller asks `forceRefresh` to exchange the refresh token.
 ///
 /// Reading these locations (another app's Keychain item, files under the home
-/// directory) is only possible because this app is **not sandboxed**.
+/// directory) relies on the sandbox temporary-exception entitlements in
+/// status.entitlements; the Keychain read prompts the user for access.
 ///
 /// ── Verify on a real Mac ──
 /// The OAuth client ids / token endpoints / stored JSON shapes below are
