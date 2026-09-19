@@ -16,7 +16,7 @@ enum OTelSetup {
         provider == .claude || provider == .gemini
     }
 
-    private static var home: URL { FileManager.default.homeDirectoryForCurrentUser }
+    private static var home: URL { FileManager.default.realHomeDirectoryForCurrentUser }
 
     // MARK: Apply / revert (Claude + Gemini)
 

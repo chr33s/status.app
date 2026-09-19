@@ -25,7 +25,7 @@ enum LocalCredentials {
     private static let geminiTokenURL = URL(string: "https://oauth2.googleapis.com/token")!
     private static let grokTokenURL = URL(string: "https://auth.x.ai/oauth2/token")!
 
-    private static var home: URL { FileManager.default.homeDirectoryForCurrentUser }
+    private static var home: URL { FileManager.default.realHomeDirectoryForCurrentUser }
 
     // MARK: Public API
 
@@ -454,6 +454,20 @@ enum LocalCredentials {
     private static func readJSONObject(_ url: URL) -> [String: Any]? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+}
+
+extension FileManager {
+    /// The user's real home directory. In a sandboxed app,
+    /// `homeDirectoryForCurrentUser` points at the app *container*
+    /// (~/Library/Containers/…/Data), but the CLI credential and config files
+    /// live in the real home — which the temporary-exception entitlements
+    /// grant access to.
+    var realHomeDirectoryForCurrentUser: URL {
+        if let dir = getpwuid(getuid())?.pointee.pw_dir {
+            return URL(fileURLWithPath: String(cString: dir), isDirectory: true)
+        }
+        return homeDirectoryForCurrentUser
     }
 }
 
