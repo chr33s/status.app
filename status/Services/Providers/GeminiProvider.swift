@@ -1,7 +1,7 @@
 import Foundation
 import os
 
-private let log = Logger(subsystem: "app.statusbar", category: "provider.gemini")
+private let log = Logger(subsystem: "app.status", category: "provider.gemini")
 
 /// Gemini usage via the **Gemini CLI** Google login (OAuth) — no API key.
 ///

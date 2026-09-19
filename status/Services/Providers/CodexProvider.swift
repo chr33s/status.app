@@ -1,7 +1,7 @@
 import Foundation
 import os
 
-private let log = Logger(subsystem: "app.statusbar", category: "provider.codex")
+private let log = Logger(subsystem: "app.status", category: "provider.codex")
 
 /// Codex subscription session limits, read using the **Codex CLI** login
 /// (ChatGPT OAuth in `~/.codex/auth.json`) — no API key required.

@@ -1,7 +1,7 @@
 import Foundation
 import os
 
-private let log = Logger(subsystem: "app.statusbar", category: "provider.grok")
+private let log = Logger(subsystem: "app.status", category: "provider.grok")
 
 /// xAI Grok session status via the **Grok CLI** OIDC login
 /// (`~/.grok/auth.json`). xAI doesn't publish a per-account quota endpoint, so

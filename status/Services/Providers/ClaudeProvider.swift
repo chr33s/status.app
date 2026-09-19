@@ -1,7 +1,7 @@
 import Foundation
 import os
 
-private let log = Logger(subsystem: "app.statusbar", category: "provider.claude")
+private let log = Logger(subsystem: "app.status", category: "provider.claude")
 
 /// Claude subscription session limits, read using the **Claude Code** login
 /// (OAuth) — no API key required.

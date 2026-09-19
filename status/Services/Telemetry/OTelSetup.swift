@@ -101,7 +101,7 @@ enum OTelSetup {
         case .codex:
             return ("~/.codex/config.toml", """
             [otel]
-            environment = "statusbar"
+            environment = "status"
             exporter = { otlp-http = { endpoint = "\(endpoint)", protocol = "json" } }
             """)
         case .copilot:

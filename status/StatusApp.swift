@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct StatusBarApp: App {
+struct StatusApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var store = UsageStore()
     @State private var settings = AppSettings.shared

@@ -7,13 +7,13 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		1A0000000000000000000004 /* StatusBar.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = StatusBar.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1A0000000000000000000004 /* status.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = status.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		1A000000000000000000000F /* StatusBar */ = {
+		1A000000000000000000000F /* status */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = StatusBar;
+			path = status;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -32,7 +32,7 @@
 		1A0000000000000000000002 = {
 			isa = PBXGroup;
 			children = (
-				1A000000000000000000000F /* StatusBar */,
+				1A000000000000000000000F /* status */,
 				1A0000000000000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -40,7 +40,7 @@
 		1A0000000000000000000003 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				1A0000000000000000000004 /* StatusBar.app */,
+				1A0000000000000000000004 /* status.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,9 +48,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		1A0000000000000000000005 /* StatusBar */ = {
+		1A0000000000000000000005 /* status */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 1A0000000000000000000006 /* Build configuration list for PBXNativeTarget "StatusBar" */;
+			buildConfigurationList = 1A0000000000000000000006 /* Build configuration list for PBXNativeTarget "status" */;
 			buildPhases = (
 				1A000000000000000000000C /* Sources */,
 				1A000000000000000000000D /* Frameworks */,
@@ -61,11 +61,11 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				1A000000000000000000000F /* StatusBar */,
+				1A000000000000000000000F /* status */,
 			);
-			name = StatusBar;
-			productName = StatusBar;
-			productReference = 1A0000000000000000000004 /* StatusBar.app */;
+			name = status;
+			productName = status;
+			productReference = 1A0000000000000000000004 /* status.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -83,7 +83,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 1A0000000000000000000009 /* Build configuration list for PBXProject "StatusBar" */;
+			buildConfigurationList = 1A0000000000000000000009 /* Build configuration list for PBXProject "status" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -97,7 +97,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				1A0000000000000000000005 /* StatusBar */,
+				1A0000000000000000000005 /* status */,
 			);
 		};
 /* End PBXProject section */
@@ -128,7 +128,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = StatusBar/StatusBar.entitlements;
+				CODE_SIGN_ENTITLEMENTS = status/status.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
@@ -138,13 +138,13 @@
 				DEVELOPMENT_TEAM = 72KB9YQR7B;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = StatusBar;
+				INFOPLIST_KEY_CFBundleDisplayName = status;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.chr33s.statusbar;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.chr33s.status;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -157,7 +157,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = StatusBar/StatusBar.entitlements;
+				CODE_SIGN_ENTITLEMENTS = status/status.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
@@ -167,13 +167,13 @@
 				DEVELOPMENT_TEAM = 72KB9YQR7B;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = StatusBar;
+				INFOPLIST_KEY_CFBundleDisplayName = status;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.chr33s.statusbar;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.chr33s.status;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -304,7 +304,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		1A0000000000000000000006 /* Build configuration list for PBXNativeTarget "StatusBar" */ = {
+		1A0000000000000000000006 /* Build configuration list for PBXNativeTarget "status" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				1A0000000000000000000007 /* Debug */,
@@ -313,7 +313,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		1A0000000000000000000009 /* Build configuration list for PBXProject "StatusBar" */ = {
+		1A0000000000000000000009 /* Build configuration list for PBXProject "status" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				1A000000000000000000000A /* Debug */,

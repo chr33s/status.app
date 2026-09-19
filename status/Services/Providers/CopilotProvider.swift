@@ -1,7 +1,7 @@
 import Foundation
 import os
 
-private let log = Logger(subsystem: "app.statusbar", category: "provider.copilot")
+private let log = Logger(subsystem: "app.status", category: "provider.copilot")
 
 /// GitHub Copilot usage via the **Copilot CLI** login (OAuth token at
 /// `~/.config/github-copilot/apps.json`) — no API key.

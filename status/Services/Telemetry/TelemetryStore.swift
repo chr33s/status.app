@@ -15,7 +15,7 @@ final class TelemetryStore {
     /// Bursts of CLI exports are coalesced into one main-actor publish per
     /// window so the menu stays responsive while a CLI is actively streaming.
     @ObservationIgnored nonisolated private let coalesceInterval: TimeInterval = 0.2
-    @ObservationIgnored nonisolated private let pendingQueue = DispatchQueue(label: "app.statusbar.telemetry.pending")
+    @ObservationIgnored nonisolated private let pendingQueue = DispatchQueue(label: "app.status.telemetry.pending")
     @ObservationIgnored nonisolated(unsafe) private var pending: [Provider: TelemetryUsage] = [:]
     @ObservationIgnored nonisolated(unsafe) private var flushScheduled = false
 

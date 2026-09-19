@@ -1,4 +1,4 @@
-# StatusBar
+# status
 
 A native macOS **menu-bar-only** app (Swift + SwiftUI) that shows your AI
 subscription usage at a glance for:
@@ -41,14 +41,14 @@ Mac except requests to each provider's own API.
 ## Build & run
 
 ```sh
-open StatusBar.xcodeproj
+open status.xcodeproj
 ```
 
-Select the **StatusBar** scheme and Run (⌘R). Set your signing **Team** under
+Select the **status** scheme and Run (⌘R). Set your signing **Team** under
 *Signing & Capabilities* on first build.
 
 ```sh
-xcodebuild -project StatusBar.xcodeproj -scheme StatusBar -configuration Release build
+xcodebuild -project status.xcodeproj -scheme status -configuration Release build
 ```
 
 ## How it gets usage
@@ -126,8 +126,8 @@ friendly note instead of failing.
 ## Project layout
 
 ```
-StatusBar/
-├─ StatusBarApp.swift          # @main, MenuBarExtra + Settings scenes
+status/
+├─ StatusApp.swift          # @main, MenuBarExtra + Settings scenes
 ├─ Models/                     # Provider, Usage, LoadState
 ├─ Services/
 │  ├─ LocalCredentials.swift   # reads/refreshes the four CLIs' logins

@@ -13,7 +13,7 @@ final class OTLPServer {
     var onRequest: ((String, Data) -> Void)?
 
     let port: UInt16
-    private let queue = DispatchQueue(label: "app.statusbar.otlp")
+    private let queue = DispatchQueue(label: "app.status.otlp")
     private var listener: NWListener?
 
     init(port: UInt16 = 4318) { self.port = port }
