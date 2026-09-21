@@ -17,7 +17,12 @@ private let log = Logger(subsystem: "app.status", category: "provider.antigravit
 /// ── Verify on a real Mac ──
 /// These are `v1internal` (undocumented) endpoints reverse-engineered from the
 /// Antigravity app; shapes are isolated here. Each call tries the daily base
-/// first, then production. A 401/403 is propagated so the store can refresh.
+/// first, then production: accounts metered on the daily deployment get a
+/// "no window open" sentinel (100% remaining) from production, so daily must
+/// win. Only a 401 is propagated so the store can refresh — this API answers
+/// 403 "You do not have a valid license" to well-authenticated requests it
+/// merely dislikes (e.g. quota calls without `project`), which must not be
+/// surfaced as an expired session.
 struct AntigravityProvider: UsageProviding {
     /// Performs a POST and returns the result, throwing `ProviderError.http` on
     /// non-2xx. Injectable for tests.
@@ -58,21 +63,31 @@ struct AntigravityProvider: UsageProviding {
             return .notice(plan: "Antigravity", "Antigravity has no API-key usage endpoint. Open Antigravity or run `agy` to sign in.")
         }
 
-        let load = try await call(Self.loadPath, token: token, userAgent: "agy", body: [:])
+        let loadBody: [String: Any] = [
+            "metadata": [
+                "ideType": "ANTIGRAVITY",
+                "platform": "PLATFORM_UNSPECIFIED",
+                "pluginType": "GEMINI",
+            ],
+        ]
+        let load = try await call(Self.loadPath, token: token, userAgent: "antigravity", body: loadBody)
         var snapshot = UsageSnapshot()
         snapshot.planName = load.flatMap { Self.plan(from: $0.json) } ?? displayName ?? "Antigravity"
 
         let now = now()
-        if let summary = try await call(Self.summaryPath, token: token, userAgent: "antigravity", body: [:]),
+        // Both quota endpoints are project-scoped: without `project` they answer
+        // 403 "You do not have a valid license" even for a valid, licensed login.
+        let project = load?.json["cloudaicompanionProject"].string.flatMap { $0.isEmpty ? nil : $0 }
+        let quotaBody: [String: Any] = project.map { ["project": $0] } ?? [:]
+
+        if let summary = try await call(Self.summaryPath, token: token, userAgent: "antigravity", body: quotaBody),
            let sections = Self.summarySections(in: summary.json, now: now) {
             // A parsed summary — even an empty one — is authoritative; the legacy
             // path would fabricate "fully used" from missing quota info.
             snapshot.sections = sections
         } else {
             log.debug("no quota summary; falling back to retrieveUserQuota")
-            let project = load?.json["cloudaicompanionProject"].string.flatMap { $0.isEmpty ? nil : $0 }
-            let quota = try await call(Self.quotaPath, token: token, userAgent: "agy",
-                                       body: project.map { ["project": $0] } ?? [:])
+            let quota = try await call(Self.quotaPath, token: token, userAgent: "antigravity", body: quotaBody)
             snapshot.sections = quota.map { Self.legacySections(in: $0.json, now: now) } ?? []
         }
         log.info("loaded \(snapshot.sections.count) quota section(s)")
@@ -82,10 +97,12 @@ struct AntigravityProvider: UsageProviding {
         return snapshot
     }
 
-    /// POSTs `path` against each base URL in turn. Auth failures propagate (the
-    /// same token fails everywhere); other failures try the next base and
-    /// finally yield nil.
-    private func call(_ path: String, token: String, userAgent: String, body: [String: String]) async throws -> HTTPResult? {
+    /// POSTs `path` against each base URL in turn. A 401 (expired/revoked
+    /// token) propagates so the store can refresh — the same token fails
+    /// everywhere. Everything else, including this API's 403 licensing
+    /// response, tries the next base and finally yields nil so the caller
+    /// falls back instead of demanding a needless re-auth.
+    private func call(_ path: String, token: String, userAgent: String, body: [String: Any]) async throws -> HTTPResult? {
         let payload = try JSONSerialization.data(withJSONObject: body)
         let headers = [
             "Authorization": "Bearer \(token)",
@@ -96,9 +113,12 @@ struct AntigravityProvider: UsageProviding {
         for base in Self.baseURLs {
             do {
                 return try await transport(base.appendingPathComponent(path), headers, payload)
-            } catch let error as ProviderError where error.isUnauthorized {
-                log.error("\(path, privacy: .public) unauthorized")
-                throw error
+            } catch let error as ProviderError {
+                if case let .http(status, message) = error, status == 401 {
+                    log.error("\(path, privacy: .public) unauthorized on \(base.host() ?? "", privacy: .public): \(message, privacy: .public)")
+                    throw error
+                }
+                log.notice("\(path, privacy: .public) failed on \(base.host() ?? "", privacy: .public): \(error.localizedDescription, privacy: .public)")
             } catch {
                 log.notice("\(path, privacy: .public) failed on \(base.host() ?? "", privacy: .public): \(error.localizedDescription, privacy: .public)")
             }

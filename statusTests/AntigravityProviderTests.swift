@@ -43,11 +43,18 @@ struct AntigravityProviderTests {
             #expect(headers["Authorization"] == "Bearer token")
             requested?.append(url)
             switch url.lastPathComponent {
-            case AntigravityProvider.summaryPath: return try .stub(summary.get())
-            case AntigravityProvider.loadPath: return try .stub(load.get())
+            case AntigravityProvider.summaryPath:
+                // Project-scoped: omitting `project` gets a 403 licensing error.
+                let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+                if case .success = load { #expect(json?["project"] as? String == "proj-1") }
+                return try .stub(summary.get())
+            case AntigravityProvider.loadPath:
+                let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+                #expect((json?["metadata"] as? [String: Any])?["ideType"] as? String == "ANTIGRAVITY")
+                return try .stub(load.get())
             case AntigravityProvider.quotaPath:
                 let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
-                #expect(json?["project"] as? String == "proj-1")
+                if case .success = load { #expect(json?["project"] as? String == "proj-1") }
                 return try .stub(quota.get())
             default:
                 Issue.record("unexpected request to \(url)")
@@ -119,13 +126,21 @@ struct AntigravityProviderTests {
         #expect(snapshot.note != nil)
     }
 
-    @Test(arguments: [401, 403])
-    func unauthorizedPropagates(status: Int) async {
+    @Test func unauthorizedPropagates() async {
         await #expect {
-            _ = try await Self.provider(summary: .failure(ProviderError.http(status: status, body: ""))).fetch(.oauth)
+            _ = try await Self.provider(summary: .failure(ProviderError.http(status: 401, body: ""))).fetch(.oauth)
         } throws: { error in
             (error as? ProviderError)?.isUnauthorized == true
         }
+    }
+
+    /// The API answers 403 "no valid license" to authenticated requests it
+    /// dislikes — that must fall back to the legacy quota, not demand re-auth.
+    @Test func licenseErrorFallsBackToLegacyQuota() async throws {
+        let snapshot = try await Self.provider(
+            summary: .failure(ProviderError.http(status: 403, body: "You do not have a valid license"))
+        ).fetch(.oauth)
+        #expect(snapshot.sections.map(\.title) == ["Session", "Claude"])
     }
 
     @Test func apiKeyDoesNotCallApi() async throws {
@@ -136,5 +151,13 @@ struct AntigravityProviderTests {
         let snapshot = try await provider.fetch(.apiKey)
         #expect(snapshot.sections.isEmpty)
         #expect(snapshot.note != nil)
+    }
+
+    @Test func dailyHostIsPrimary() {
+        #expect(AntigravityProvider.baseURLs.first?.host() == "daily-cloudcode-pa.googleapis.com")
+    }
+
+    @Test func resetCacheCanBeCalled() {
+        LocalCredentials.resetCache(for: .antigravity)
     }
 }

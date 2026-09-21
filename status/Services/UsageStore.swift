@@ -80,6 +80,9 @@ final class UsageStore {
     }
 
     func refresh(_ provider: Provider) async {
+        if case .needsReauth = states[provider] {
+            LocalCredentials.resetCache(for: provider)
+        }
         guard let credential = await LocalCredentials.credential(for: provider) else {
             states[provider] = .notConfigured
             return
@@ -118,6 +121,7 @@ final class UsageStore {
     /// Called by the settings UI / re-check actions.
     func reload(_ provider: Provider) {
         Task {
+            LocalCredentials.resetCache(for: provider)
             await refresh(provider)
             publishToWidgets()
         }

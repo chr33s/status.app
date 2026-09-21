@@ -42,6 +42,21 @@ enum LocalCredentials {
         return .oauth(accessToken: loaded.access, accountID: loaded.accountID, displayName: loaded.displayName)
     }
 
+    /// Drops any in-memory cached credentials for the provider so subsequent reads hit the disk/keychain fresh.
+    static func resetCache(for provider: Provider) {
+        keychainLock.withLock {
+            switch provider {
+            case .claude:
+                cachedClaudeKeychain = nil
+            case .antigravity:
+                cachedAntigravityKeychain = nil
+                refreshedAntigravity = nil
+            default:
+                break
+            }
+        }
+    }
+
     /// Exchanges the refresh token for a new access token and writes it back to
     /// the CLI's store. Returns nil when there's no refresh token to use.
     ///
@@ -54,7 +69,12 @@ enum LocalCredentials {
         guard provider == .claude || provider == .antigravity else { return nil }
         let hadCache = keychainLock.withLock {
             let had = provider == .claude ? cachedClaudeKeychain != nil : cachedAntigravityKeychain != nil
-            if provider == .claude { cachedClaudeKeychain = nil } else { cachedAntigravityKeychain = nil }
+            if provider == .claude {
+                cachedClaudeKeychain = nil
+            } else {
+                cachedAntigravityKeychain = nil
+                refreshedAntigravity = nil
+            }
             return had
         }
         // Without a cache the attempt above already read the store fresh.
@@ -195,13 +215,14 @@ enum LocalCredentials {
         if let refreshed, refreshed.refresh == refresh, refreshed.expiry > Date() {
             access = refreshed.access
         }
+        let email = (root["id_token"].string ?? token["id_token"].string).flatMap(emailFromIDToken(_:))
         guard let access, !access.isEmpty else {
             // No access token but a refresh token: let the 401 path refresh it.
             guard refresh != nil else { return nil }
-            return Loaded(access: "", refresh: refresh, accountID: nil, displayName: nil,
+            return Loaded(access: "", refresh: refresh, accountID: nil, displayName: email,
                           source: .antigravityKeychain, apiKey: nil, raw: raw)
         }
-        return Loaded(access: access, refresh: refresh, accountID: nil, displayName: nil,
+        return Loaded(access: access, refresh: refresh, accountID: nil, displayName: email,
                       source: .antigravityKeychain, apiKey: nil, raw: raw)
     }
 
