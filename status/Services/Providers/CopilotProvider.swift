@@ -27,7 +27,7 @@ struct CopilotProvider: UsageProviding {
 
     init(
         transport: @escaping Transport = { url, headers in try await HTTPClient.send(url, headers: headers) },
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.transport = transport
         self.now = now

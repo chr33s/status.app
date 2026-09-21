@@ -32,7 +32,7 @@ struct CodexProvider: UsageProviding {
         transport: @escaping Transport = { url, headers, body in
             try await HTTPClient.send(url, method: "POST", headers: headers, body: body, failOnError: false)
         },
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.transport = transport
         self.now = now

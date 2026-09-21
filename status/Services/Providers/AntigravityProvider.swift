@@ -47,7 +47,7 @@ struct AntigravityProvider: UsageProviding {
         transport: @escaping Transport = { url, headers, body in
             try await HTTPClient.send(url, method: "POST", headers: headers, body: body)
         },
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.transport = transport
         self.now = now
