@@ -5,11 +5,11 @@ subscription usage at a glance for:
 
 - **Codex** — OpenAI
 - **Claude** — Anthropic
-- **Gemini** — Google
+- **Antigravity** — Google
 - **GitHub Copilot** — GitHub
 
 **No API keys.** Every provider reuses the login of its existing CLI (Claude
-Code, Codex, Gemini, GitHub). Nothing is entered by hand and nothing leaves your
+Code, Codex, Antigravity, GitHub). Nothing is entered by hand and nothing leaves your
 Mac except requests to each provider's own API.
 
 ## Features
@@ -28,7 +28,7 @@ Mac except requests to each provider's own API.
 - Configurable auto-refresh interval, optional menu-bar usage badge, and
   launch-at-login (via `SMAppService`).
 - Hardened Runtime enabled. **App Sandbox is disabled** — reading the CLIs'
-  logins (a Keychain item and files under `~/.codex`, `~/.claude`, `~/.gemini`,
+  logins (a Keychain item and files under `~/.codex`, `~/.claude`,
   `~/.config`) isn't possible from within the sandbox, so the app ships
   non-sandboxed (not App Store distributable), like the CLIs it reads.
 
@@ -59,11 +59,11 @@ Sign into each CLI once and the app picks it up automatically:
 |----------|-----|-----------------|--------------|
 | Claude | Claude Code (`claude`) | `Claude Code-credentials` Keychain item, or `~/.claude/.credentials.json` | OAuth probe → `anthropic-ratelimit-unified-*` headers → Session (5h) / Weekly (7d) |
 | Codex | Codex CLI (`codex login`) | `~/.codex/auth.json` | ChatGPT OAuth → streamed `rate_limits.primary` / `.secondary` |
-| Gemini | Gemini CLI (`gemini`) | `~/.gemini/oauth_creds.json` | Code Assist `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota` → per-model quota |
+| Antigravity | Antigravity app / `agy` | `gemini` / `antigravity` Keychain item (read-only; refreshed tokens kept in memory) | Cloud Code `v1internal:retrieveUserQuotaSummary` → Gemini + Claude pools, Session (5h) / Weekly; falls back to `retrieveUserQuota` |
 | Copilot | GitHub CLI (`gh auth login`) | `~/.config/github-copilot/apps.json` or `~/.config/gh/hosts.yml` | `GET /users/{login}/settings/billing/usage` |
 
 If a CLI is configured with a plain API key instead of an OAuth login
-(`OPENAI_API_KEY` in `auth.json`, `GEMINI_API_KEY` in `~/.gemini/.env`/env), the
+(`OPENAI_API_KEY` in `auth.json`, `XAI_API_KEY` for Grok), the
 app uses it where it can but notes that subscription limits aren't available.
 
 ## Live usage via OpenTelemetry
@@ -71,13 +71,13 @@ app uses it where it can but notes that subscription limits aren't available.
 Alongside the on-demand probes, the app runs an **embedded OTLP/HTTP collector**
 on `http://localhost:4318` and shows the token/cost counts each CLI reports as
 you actually use it — a passive, vendor-sanctioned channel (no probes, no
-credential handling). All four CLIs export OTLP over HTTP as `application/json`.
+credential handling). Claude, Codex, and Copilot export OTLP over HTTP as `application/json`.
 
 Open **Settings → Telemetry**:
 
-- **Claude & Gemini** are configured automatically (a safe JSON merge into
-  `~/.claude/settings.json` and `~/.gemini/settings.json`) when you toggle
-  *Automatically configure*.
+- **Claude** is configured automatically (a safe JSON merge into
+  `~/.claude/settings.json`) when you toggle *Automatically configure*.
+- **Antigravity** doesn't export OpenTelemetry, so it has no live usage.
 - **Codex** (`~/.codex/config.toml` `[otel]`) and **Copilot** (shell `OTEL_*`
   env) show a copy-paste snippet, since we don't rewrite TOML or your shell rc.
 
@@ -98,7 +98,7 @@ usage; the probes give the subscription Session/Weekly/quota windows on demand.
   **writes the rotated token back** to the same store.
 - If the refresh fails (no/invalid refresh token), the provider switches to a
   **“session expired — re-authenticate”** state with a button that opens Terminal
-  running the CLI's login command (`claude`, `codex login`, `gemini`,
+  running the CLI's login command (`claude`, `codex login`, `agy`,
   `gh auth login --web`). The same button appears when you're not signed in.
 
 ### Caveats — please verify on your Mac
@@ -108,8 +108,9 @@ but exact endpoints, OAuth client ids, and JSON shapes are observed and may shif
 between CLI releases. Each is isolated for easy adjustment:
 
 - Claude / Codex session limits — `ClaudeProvider` / `CodexProvider` + `SessionUsage`.
-- Gemini quota — `GeminiProvider` (`v1internal:retrieveUserQuota`; a full bucket
-  may omit `remainingAmount`/`remainingFraction`, treated as 0% used).
+- Antigravity quota — `AntigravityProvider` (`v1internal:retrieveUserQuotaSummary`,
+  reverse-engineered as in [openusage](https://github.com/robinebers/openusage);
+  legacy per-model buckets are pooled by worst remaining fraction).
 - Copilot billing — the `gh` OAuth token may lack the **billing / "Plan"** read
   permission the usage endpoint needs, returning 403 → re-auth. If so, grant it
   with `gh auth refresh -s read:org` (or use a token with Plan access).

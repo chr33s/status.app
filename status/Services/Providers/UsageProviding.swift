@@ -11,7 +11,7 @@ enum Credential: Sendable {
     ///   where the latter is already human-readable.
     case oauth(accessToken: String, accountID: String?, displayName: String?)
     /// A local API key found in a CLI's config (e.g. Codex `OPENAI_API_KEY`,
-    /// Gemini `GEMINI_API_KEY`). No subscription limits are available for these.
+    /// Grok `XAI_API_KEY`). No subscription limits are available for these.
     case apiKey(String)
 }
 
@@ -30,7 +30,7 @@ enum ProviderFactory {
         switch provider {
         case .codex: return CodexProvider()
         case .claude: return ClaudeProvider()
-        case .gemini: return GeminiProvider()
+        case .antigravity: return AntigravityProvider()
         case .copilot: return CopilotProvider()
         case .grok: return GrokProvider()
         }

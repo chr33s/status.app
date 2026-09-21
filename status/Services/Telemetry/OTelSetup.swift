@@ -2,8 +2,8 @@ import Foundation
 
 /// Points each CLI's OpenTelemetry export at the embedded collector.
 ///
-/// Claude and Gemini are configured automatically by safely merging their JSON
-/// settings files. Codex (`config.toml`) and Copilot (shell env) are offered as
+/// Claude is configured automatically by safely merging its JSON settings
+/// file. Codex (`config.toml`) and Copilot (shell env) are offered as
 /// copy-paste snippets so we never rewrite a TOML file or the user's shell rc.
 ///
 /// ── Verify on a real Mac ──
@@ -13,21 +13,19 @@ enum OTelSetup {
     /// Whether a provider can be configured automatically (JSON) or needs a
     /// manual snippet.
     static func isAutomatic(_ provider: Provider) -> Bool {
-        provider == .claude || provider == .gemini
+        provider == .claude
     }
 
     private static var home: URL { FileManager.default.realHomeDirectoryForCurrentUser }
 
-    // MARK: Apply / revert (Claude + Gemini)
+    // MARK: Apply / revert (Claude)
 
     static func configure(endpoint: String) {
         configureClaude(endpoint: endpoint)
-        configureGemini(endpoint: endpoint)
     }
 
     static func revert() {
         revertClaude()
-        revertGemini()
     }
 
     static func isConfigured(_ provider: Provider, endpoint: String) -> Bool {
@@ -36,17 +34,12 @@ enum OTelSetup {
             let env = readJSON(claudeSettings)?["env"] as? [String: Any]
             return (env?["OTEL_EXPORTER_OTLP_ENDPOINT"] as? String) == endpoint
                 && env?["CLAUDE_CODE_ENABLE_TELEMETRY"] != nil
-        case .gemini:
-            let telemetry = readJSON(geminiSettings)?["telemetry"] as? [String: Any]
-            return (telemetry?["enabled"] as? Bool == true)
-                && (telemetry?["otlpEndpoint"] as? String) == endpoint
         default:
             return false
         }
     }
 
     private static var claudeSettings: URL { home.appendingPathComponent(".claude/settings.json") }
-    private static var geminiSettings: URL { home.appendingPathComponent(".gemini/settings.json") }
 
     private static func claudeEnv(_ endpoint: String) -> [String: String] {
         [
@@ -73,25 +66,6 @@ enum OTelSetup {
         for key in claudeEnv("").keys { env.removeValue(forKey: key) }
         root["env"] = env
         writeJSON(root, to: claudeSettings)
-    }
-
-    private static func configureGemini(endpoint: String) {
-        var root = readJSON(geminiSettings) ?? [:]
-        root["telemetry"] = [
-            "enabled": true,
-            "otlpProtocol": "http",
-            "otlpEndpoint": endpoint,
-            "useCollector": true,
-            "logPrompts": false,
-        ]
-        writeJSON(root, to: geminiSettings)
-    }
-
-    private static func revertGemini() {
-        guard var root = readJSON(geminiSettings), var telemetry = root["telemetry"] as? [String: Any] else { return }
-        telemetry["enabled"] = false
-        root["telemetry"] = telemetry
-        writeJSON(root, to: geminiSettings)
     }
 
     // MARK: Manual snippets (Codex + Copilot)

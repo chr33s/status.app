@@ -2,8 +2,8 @@ import Foundation
 
 /// Parses an OTLP/JSON metrics payload into per-provider usage increments.
 ///
-/// Only vendor-prefixed counters are read (`claude_code.*`, `gemini_cli.*`,
-/// `codex*`, `copilot*`) so generic `gen_ai.*` histograms — which some CLIs emit
+/// Only vendor-prefixed counters are read (`claude_code.*`, `codex*`,
+/// `copilot*`) so generic `gen_ai.*` histograms — which some CLIs emit
 /// alongside the vendor counters — don't double-count.
 ///
 /// ── Verify on a real Mac ──
@@ -33,7 +33,6 @@ enum OTelMetricsParser {
 
     private static func provider(forMetric name: String) -> Provider? {
         if name.hasPrefix("claude_code.") { return .claude }
-        if name.hasPrefix("gemini_cli.") { return .gemini }
         if name.hasPrefix("codex") { return .codex }
         if name.hasPrefix("copilot") { return .copilot }
         if name.hasPrefix("grok") || name.hasPrefix("xai") { return .grok }

@@ -25,7 +25,6 @@
 	<array>
 		<string>/.claude/</string>
 		<string>/.codex/</string>
-		<string>/.gemini/</string>
 		<string>/.grok/</string>
 	</array>
 </dict>

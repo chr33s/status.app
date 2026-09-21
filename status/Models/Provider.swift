@@ -7,7 +7,7 @@ import SwiftUI
 enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
     case codex
     case claude
-    case gemini
+    case antigravity
     case copilot
     case grok
 
@@ -17,7 +17,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         switch self {
         case .codex: return "Codex"
         case .claude: return "Claude"
-        case .gemini: return "Gemini"
+        case .antigravity: return "Antigravity"
         case .copilot: return "Copilot"
         case .grok: return "Grok"
         }
@@ -27,7 +27,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         switch self {
         case .codex: return "OpenAI Codex"
         case .claude: return "Claude"
-        case .gemini: return "Gemini"
+        case .antigravity: return "Google Antigravity"
         case .copilot: return "GitHub Copilot"
         case .grok: return "xAI Grok"
         }
@@ -37,7 +37,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         switch self {
         case .codex: return "curlybraces"
         case .claude: return "sparkles"
-        case .gemini: return "diamond.fill"
+        case .antigravity: return "arrow.up.circle.fill"
         case .copilot: return "cpu"
         case .grok: return "x.circle.fill"
         }
@@ -49,7 +49,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         switch self {
         case .codex: return "openai"
         case .claude: return "claude"
-        case .gemini: return "gemini"
+        case .antigravity: return "antigravity"
         case .copilot: return "copilot"
         case .grok: return "grok"
         }
@@ -59,7 +59,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         switch self {
         case .codex: return Color(red: 0.06, green: 0.71, blue: 0.51)   // OpenAI teal
         case .claude: return Color(red: 0.85, green: 0.46, blue: 0.30)  // Anthropic clay
-        case .gemini: return Color(red: 0.26, green: 0.52, blue: 0.96)  // Google blue
+        case .antigravity: return Color(red: 0.26, green: 0.52, blue: 0.96) // Google blue
         case .copilot: return Color(red: 0.45, green: 0.45, blue: 0.50) // GitHub graphite
         case .grok: return Color(red: 0.20, green: 0.20, blue: 0.22)    // xAI near-black
         }
@@ -70,7 +70,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         switch self {
         case .codex: return "Codex CLI"
         case .claude: return "Claude Code"
-        case .gemini: return "Gemini CLI"
+        case .antigravity: return "Antigravity"
         case .copilot: return "Copilot CLI"
         case .grok: return "Grok CLI"
         }
@@ -81,7 +81,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         switch self {
         case .codex: return "Install the Codex CLI and run `codex login` to sign in."
         case .claude: return "Install Claude Code and run `claude` to sign in."
-        case .gemini: return "Install the Gemini CLI and run `gemini` (Login with Google)."
+        case .antigravity: return "Install Antigravity and sign in, or run `agy` to sign in."
         case .copilot: return "Install the Copilot CLI and run `copilot login` to sign in."
         case .grok: return "Install the Grok CLI and run `grok login`, or set XAI_API_KEY in your shell."
         }
@@ -92,7 +92,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         switch self {
         case .codex: return "codex login --device-auth"
         case .claude: return "claude auth login"
-        case .gemini: return "gemini"
+        case .antigravity: return "agy"
         case .copilot: return "copilot login"
         case .grok: return "grok login"
         }
@@ -103,7 +103,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         switch self {
         case .codex: return URL(string: "https://platform.openai.com/usage")!
         case .claude: return URL(string: "https://claude.ai/settings/usage")!
-        case .gemini: return URL(string: "https://aistudio.google.com/usage")!
+        case .antigravity: return URL(string: "https://antigravity.google")!
         case .copilot: return URL(string: "https://github.com/settings/billing")!
         case .grok: return URL(string: "https://console.x.ai/team/default/usage")!
         }
@@ -114,7 +114,7 @@ enum Provider: String, CaseIterable, Identifiable, Codable, Sendable {
         switch self {
         case .codex: return URL(string: "https://status.openai.com")!
         case .claude: return URL(string: "https://status.anthropic.com")!
-        case .gemini: return URL(string: "https://status.cloud.google.com")!
+        case .antigravity: return URL(string: "https://status.cloud.google.com")!
         case .copilot: return URL(string: "https://www.githubstatus.com")!
         case .grok: return URL(string: "https://status.x.ai")!
         }

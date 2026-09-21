@@ -1,7 +1,7 @@
 import Foundation
 import Security
 
-/// Reads the existing logins of the Claude Code, Codex, Gemini, and GitHub CLIs
+/// Reads the existing logins of Claude Code, Codex, Antigravity, and the GitHub CLIs
 /// so the app can show real usage without asking for any API key. When a request
 /// returns 401 the caller asks `forceRefresh` to exchange the refresh token.
 ///
@@ -20,9 +20,11 @@ enum LocalCredentials {
     private static let claudeTokenURL = URL(string: "https://console.anthropic.com/v1/oauth/token")!
     private static let codexClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
     private static let codexTokenURL = URL(string: "https://auth.openai.com/oauth/token")!
-    private static let geminiClientID = "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com"
-    private static let geminiClientSecret = "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"
-    private static let geminiTokenURL = URL(string: "https://oauth2.googleapis.com/token")!
+    // Antigravity's installed-app OAuth client (shipped in every copy of the app,
+    // so the "secret" isn't confidential), as used by openusage.
+    private static let antigravityClientID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
+    private static let antigravityClientSecret = "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"
+    private static let googleTokenURL = URL(string: "https://oauth2.googleapis.com/token")!
     private static let grokTokenURL = URL(string: "https://auth.x.ai/oauth2/token")!
 
     private static var home: URL { FileManager.default.realHomeDirectoryForCurrentUser }
@@ -49,10 +51,10 @@ enum LocalCredentials {
     /// it out-of-band) rather than paid on every expired access token.
     static func forceRefresh(_ provider: Provider) async -> Credential? {
         if let credential = await refreshFromStore(provider) { return credential }
-        guard provider == .claude else { return nil }
+        guard provider == .claude || provider == .antigravity else { return nil }
         let hadCache = keychainLock.withLock {
-            let had = cachedClaudeKeychain != nil
-            cachedClaudeKeychain = nil
+            let had = provider == .claude ? cachedClaudeKeychain != nil : cachedAntigravityKeychain != nil
+            if provider == .claude { cachedClaudeKeychain = nil } else { cachedAntigravityKeychain = nil }
             return had
         }
         // Without a cache the attempt above already read the store fresh.
@@ -68,7 +70,7 @@ enum LocalCredentials {
 
     // MARK: Loaded credential
 
-    private enum Source { case claudeKeychain, claudeFile, codexFile, geminiFile, copilotConfig, grokFile }
+    private enum Source { case claudeKeychain, claudeFile, codexFile, antigravityKeychain, copilotConfig, grokFile }
 
     private struct Loaded {
         var access: String
@@ -87,7 +89,7 @@ enum LocalCredentials {
         switch provider {
         case .claude: return loadClaude()
         case .codex: return loadCodex()
-        case .gemini: return loadGemini()
+        case .antigravity: return loadAntigravity()
         case .copilot: return loadCopilot()
         case .grok: return loadGrok()
         }
@@ -126,23 +128,29 @@ enum LocalCredentials {
     /// so reads are kept to launch and refresh-token failure.
     private static let keychainLock = NSLock()
     private static var cachedClaudeKeychain: [String: Any]?
+    private static var cachedAntigravityKeychain: [String: Any]?
 
     private static func claudeKeychainJSON() -> [String: Any]? {
         keychainLock.lock()
         defer { keychainLock.unlock() }
         if let cached = cachedClaudeKeychain { return cached }
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "Claude Code-credentials",
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data else { return nil }
+        guard let data = keychainData(service: "Claude Code-credentials") else { return nil }
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         cachedClaudeKeychain = json
         return json
+    }
+
+    private static func keychainData(service: String, account: String? = nil) -> Data? {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        if let account { query[kSecAttrAccount as String] = account }
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else { return nil }
+        return item as? Data
     }
 
     // MARK: Codex CLI
@@ -168,24 +176,51 @@ enum LocalCredentials {
         return nil
     }
 
-    // MARK: Gemini CLI
+    // MARK: Antigravity
 
-    private static func loadGemini() -> Loaded? {
-        let file = home.appendingPathComponent(".gemini/oauth_creds.json")
-        if let raw = readJSONObject(file) {
-            let root = JSON(raw)
-            if let access = root["access_token"].string, !access.isEmpty {
-                let email = root["id_token"].string.flatMap(emailFromIDToken(_:))
-                return Loaded(access: access, refresh: root["refresh_token"].string,
-                              accountID: nil, displayName: email,
-                              source: .geminiFile, apiKey: nil, raw: raw)
-            }
+    /// The Antigravity app / `agy` CLI keep their Google OAuth login in the
+    /// Keychain (service `gemini`, account `antigravity`) as an optional
+    /// `go-keyring-base64:` wrapper around `{ token: { access_token,
+    /// refresh_token, expiry } }`. We never write back to that item: a
+    /// refreshed access token lives only in `refreshedAntigravity`.
+    private static var refreshedAntigravity: (refresh: String, access: String, expiry: Date)?
+
+    private static func loadAntigravity() -> Loaded? {
+        guard let raw = antigravityKeychainJSON() else { return nil }
+        let root = JSON(raw)
+        let token = root["token"].value == nil ? root : root["token"]
+        let refresh = token["refresh_token"].string ?? token["refreshToken"].string
+        var access = token["access_token"].string ?? token["accessToken"].string
+        let refreshed = keychainLock.withLock { refreshedAntigravity }
+        if let refreshed, refreshed.refresh == refresh, refreshed.expiry > Date() {
+            access = refreshed.access
         }
-        if let key = geminiAPIKey() {
-            return Loaded(access: "", refresh: nil, accountID: nil, displayName: nil,
-                          source: .geminiFile, apiKey: key, raw: [:])
+        guard let access, !access.isEmpty else {
+            // No access token but a refresh token: let the 401 path refresh it.
+            guard refresh != nil else { return nil }
+            return Loaded(access: "", refresh: refresh, accountID: nil, displayName: nil,
+                          source: .antigravityKeychain, apiKey: nil, raw: raw)
         }
-        return nil
+        return Loaded(access: access, refresh: refresh, accountID: nil, displayName: nil,
+                      source: .antigravityKeychain, apiKey: nil, raw: raw)
+    }
+
+    private static func antigravityKeychainJSON() -> [String: Any]? {
+        keychainLock.lock()
+        defer { keychainLock.unlock() }
+        if let cached = cachedAntigravityKeychain { return cached }
+        guard let data = keychainData(service: "gemini", account: "antigravity"),
+              var text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        else { return nil }
+        let prefix = "go-keyring-base64:"
+        if text.hasPrefix(prefix) {
+            guard let decoded = Data(base64Encoded: String(text.dropFirst(prefix.count))),
+                  let string = String(data: decoded, encoding: .utf8) else { return nil }
+            text = string
+        }
+        let json = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]
+        cachedAntigravityKeychain = json
+        return json
     }
 
     /// Decodes an OAuth `id_token` JWT and returns the `email` claim if present.
@@ -200,22 +235,6 @@ enum LocalCredentials {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         return json["email"] as? String
-    }
-
-    private static func geminiAPIKey() -> String? {
-        if let key = ProcessInfo.processInfo.environment["GEMINI_API_KEY"], !key.isEmpty { return key }
-        // ~/.gemini/.env: GEMINI_API_KEY=...
-        let env = home.appendingPathComponent(".gemini/.env")
-        guard let text = try? String(contentsOf: env, encoding: .utf8) else { return nil }
-        for line in text.split(whereSeparator: \.isNewline) {
-            let parts = line.split(separator: "=", maxSplits: 1)
-            guard parts.count == 2 else { continue }
-            let name = parts[0].trimmingCharacters(in: .whitespaces)
-            if name == "GEMINI_API_KEY" || name == "GOOGLE_API_KEY" {
-                return parts[1].trimmingCharacters(in: CharacterSet(charactersIn: " \"'"))
-            }
-        }
-        return nil
     }
 
     // MARK: Grok CLI (xAI)
@@ -324,8 +343,8 @@ enum LocalCredentials {
             return try await refreshClaude(loaded, refreshToken: refreshToken)
         case .codexFile:
             return try await refreshCodex(loaded, refreshToken: refreshToken)
-        case .geminiFile:
-            return try await refreshGemini(loaded, refreshToken: refreshToken)
+        case .antigravityKeychain:
+            return try await refreshAntigravity(loaded, refreshToken: refreshToken)
         case .grokFile:
             return try await refreshGrok(loaded, refreshToken: refreshToken)
         case .copilotConfig:
@@ -408,32 +427,30 @@ enum LocalCredentials {
         return updated
     }
 
-    private static func refreshGemini(_ loaded: Loaded, refreshToken: String) async throws -> Loaded {
+    private static func refreshAntigravity(_ loaded: Loaded, refreshToken: String) async throws -> Loaded {
         let form = [
-            "client_id": geminiClientID,
-            "client_secret": geminiClientSecret,
+            "client_id": antigravityClientID,
+            "client_secret": antigravityClientSecret,
             "refresh_token": refreshToken,
             "grant_type": "refresh_token",
         ].map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) ?? $0.value)" }
             .joined(separator: "&")
-        let result = try await HTTPClient.send(geminiTokenURL, method: "POST",
+        let result = try await HTTPClient.send(googleTokenURL, method: "POST",
             headers: ["Content-Type": "application/x-www-form-urlencoded"], body: Data(form.utf8))
         guard let access = result.json["access_token"].string else { return loaded }
 
         var updated = loaded
         updated.access = access
-        updated.raw["access_token"] = access
-        if let expiresIn = result.json["expires_in"].double {
-            updated.raw["expiry_date"] = Date().addingTimeInterval(expiresIn).timeIntervalSince1970 * 1000
-        }
-        persist(updated.raw, to: updated.source)
+        // Keep a minute of headroom so a near-expiry token isn't reused.
+        let expiry = Date().addingTimeInterval((result.json["expires_in"].double ?? 3_600) - 60)
+        keychainLock.withLock { refreshedAntigravity = (refreshToken, access, expiry) }
         return updated
     }
 
     // MARK: Write-back
 
     private static func persist(_ raw: [String: Any], to source: Source) {
-        let pretty = source == .codexFile || source == .geminiFile || source == .grokFile
+        let pretty = source == .codexFile || source == .grokFile
         guard let data = try? JSONSerialization.data(
             withJSONObject: raw,
             options: pretty ? .prettyPrinted : []
@@ -452,11 +469,9 @@ enum LocalCredentials {
             try? data.write(to: home.appendingPathComponent(".claude/.credentials.json"), options: .atomic)
         case .codexFile:
             try? data.write(to: home.appendingPathComponent(".codex/auth.json"), options: .atomic)
-        case .geminiFile:
-            try? data.write(to: home.appendingPathComponent(".gemini/oauth_creds.json"), options: .atomic)
         case .grokFile:
             try? data.write(to: home.appendingPathComponent(".grok/auth.json"), options: .atomic)
-        case .copilotConfig:
+        case .antigravityKeychain, .copilotConfig:
             break
         }
     }

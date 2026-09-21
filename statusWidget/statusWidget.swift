@@ -39,7 +39,7 @@ extension SharedUsagePayload {
         providers: [
             .init(provider: .codex, snapshot: demo(0.35), needsAttention: false),
             .init(provider: .claude, snapshot: demo(0.62), needsAttention: false),
-            .init(provider: .gemini, snapshot: demo(0.12), needsAttention: false),
+            .init(provider: .antigravity, snapshot: demo(0.12), needsAttention: false),
             .init(provider: .copilot, snapshot: demo(0.80), needsAttention: false),
         ]
     )

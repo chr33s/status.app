@@ -20,7 +20,7 @@ final class AppSettings {
     var showMenuBarBadge: Bool {
         didSet { defaults.set(showMenuBarBadge, forKey: Key.showBadge) }
     }
-    /// Whether the app auto-configures Claude/Gemini telemetry on launch.
+    /// Whether the app auto-configures Claude telemetry on launch.
     var telemetryAutoConfigured: Bool {
         didSet { defaults.set(telemetryAutoConfigured, forKey: Key.telemetryAuto) }
     }

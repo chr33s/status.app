@@ -136,7 +136,7 @@ struct TelemetrySettingsView: View {
                         .truncationMode(.middle)
                 }
 
-                Toggle("Auto-configure Claude & Gemini", isOn: Binding(
+                Toggle("Auto-configure Claude", isOn: Binding(
                     get: { settings.telemetryAutoConfigured },
                     set: { on in
                         settings.telemetryAutoConfigured = on
@@ -144,10 +144,11 @@ struct TelemetrySettingsView: View {
                         else { OTelSetup.revert() }
                     }
                 ))
-                Text("Writes OTLP settings into ~/.claude/settings.json and ~/.gemini/settings.json (safely merged). Restart each CLI afterwards.")
+                Text("Writes OTLP settings into ~/.claude/settings.json (safely merged). Restart Claude Code afterwards.")
                     .font(.caption).foregroundStyle(.secondary)
 
-                ForEach(Provider.allCases) { provider in
+                // Antigravity doesn't export OpenTelemetry.
+                ForEach(Provider.allCases.filter { $0 != .antigravity }) { provider in
                     TelemetryProviderRow(provider: provider, endpoint: telemetry.endpoint)
                 }
             }

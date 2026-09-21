@@ -44,8 +44,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		7E57000000000000000000A2 /* statusTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = statusTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A0000000000000000000004 /* status.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = status.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7E57000000000000000000A2 /* statusTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = statusTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		DD5D17C9306121B500EB70BA /* statusWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = statusWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		DD5D17CB306121B500EB70BA /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = /System/Library/Frameworks/WidgetKit.framework; sourceTree = "<absolute>"; };
 		DD5D17CD306121B500EB70BA /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = /System/Library/Frameworks/SwiftUI.framework; sourceTree = "<absolute>"; };
@@ -70,17 +70,17 @@
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		7E57000000000000000000A3 /* statusTests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = statusTests;
-			sourceTree = "<group>";
-		};
 		1A000000000000000000000F /* status */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				DD5D17E3306122CD00EB70BA /* Exceptions for "status" folder in "status" target */,
 			);
 			path = status;
+			sourceTree = "<group>";
+		};
+		7E57000000000000000000A3 /* statusTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = statusTests;
 			sourceTree = "<group>";
 		};
 		DD5D17CF306121B500EB70BA /* statusWidget */ = {
@@ -94,14 +94,14 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		7E57000000000000000000A4 /* Frameworks */ = {
+		1A000000000000000000000D /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		1A000000000000000000000D /* Frameworks */ = {
+		7E57000000000000000000A4 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -154,27 +154,6 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		7E57000000000000000000A5 /* statusTests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 7E57000000000000000000AA /* Build configuration list for PBXNativeTarget "statusTests" */;
-			buildPhases = (
-				7E57000000000000000000A6 /* Sources */,
-				7E57000000000000000000A4 /* Frameworks */,
-				7E57000000000000000000A7 /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				7E57000000000000000000A8 /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				7E57000000000000000000A3 /* statusTests */,
-			);
-			name = statusTests;
-			productName = statusTests;
-			productReference = 7E57000000000000000000A2 /* statusTests.xctest */;
-			productType = "com.apple.product-type.bundle.unit-test";
-		};
 		1A0000000000000000000005 /* status */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 1A0000000000000000000006 /* Build configuration list for PBXNativeTarget "status" */;
@@ -196,6 +175,27 @@
 			productName = status;
 			productReference = 1A0000000000000000000004 /* status.app */;
 			productType = "com.apple.product-type.application";
+		};
+		7E57000000000000000000A5 /* statusTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7E57000000000000000000AA /* Build configuration list for PBXNativeTarget "statusTests" */;
+			buildPhases = (
+				7E57000000000000000000A6 /* Sources */,
+				7E57000000000000000000A4 /* Frameworks */,
+				7E57000000000000000000A7 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				7E57000000000000000000A8 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				7E57000000000000000000A3 /* statusTests */,
+			);
+			name = statusTests;
+			productName = statusTests;
+			productReference = 7E57000000000000000000A2 /* statusTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
 		};
 		DD5D17C8306121B500EB70BA /* statusWidgetExtension */ = {
 			isa = PBXNativeTarget;
@@ -232,12 +232,12 @@
 					1A0000000000000000000005 = {
 						CreatedOnToolsVersion = 16.0;
 					};
-					DD5D17C8306121B500EB70BA = {
-						CreatedOnToolsVersion = 27.0;
-					};
 					7E57000000000000000000A5 = {
 						CreatedOnToolsVersion = 27.0;
 						TestTargetID = 1A0000000000000000000005;
+					};
+					DD5D17C8306121B500EB70BA = {
+						CreatedOnToolsVersion = 27.0;
 					};
 				};
 			};
@@ -263,14 +263,14 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		7E57000000000000000000A7 /* Resources */ = {
+		1A000000000000000000000E /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		1A000000000000000000000E /* Resources */ = {
+		7E57000000000000000000A7 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -287,14 +287,14 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		7E57000000000000000000A6 /* Sources */ = {
+		1A000000000000000000000C /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		1A000000000000000000000C /* Sources */ = {
+		7E57000000000000000000A6 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -324,42 +324,6 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		7E57000000000000000000AB /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.chr33s.statusTests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/status.app/Contents/MacOS/status";
-			};
-			name = Debug;
-		};
-		7E57000000000000000000AC /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = dev.chr33s.statusTests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/status.app/Contents/MacOS/status";
-			};
-			name = Release;
-		};
 		1A0000000000000000000007 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -477,7 +441,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 72KB9YQR7B;
@@ -543,7 +507,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 72KB9YQR7B;
@@ -568,6 +532,42 @@
 			};
 			name = Release;
 		};
+		7E57000000000000000000AB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.chr33s.statusTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/status.app/Contents/MacOS/status";
+			};
+			name = Debug;
+		};
+		7E57000000000000000000AC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.chr33s.statusTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/status.app/Contents/MacOS/status";
+			};
+			name = Release;
+		};
 		DD5D17DB306121B600EB70BA /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -578,7 +578,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 5;
 				ENABLE_APP_SANDBOX = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = statusWidget/Info.plist;
@@ -623,7 +623,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 5;
 				ENABLE_APP_SANDBOX = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = statusWidget/Info.plist;
@@ -661,15 +661,6 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		7E57000000000000000000AA /* Build configuration list for PBXNativeTarget "statusTests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				7E57000000000000000000AB /* Debug */,
-				7E57000000000000000000AC /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 		1A0000000000000000000006 /* Build configuration list for PBXNativeTarget "status" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -684,6 +675,15 @@
 			buildConfigurations = (
 				1A000000000000000000000A /* Debug */,
 				1A000000000000000000000B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		7E57000000000000000000AA /* Build configuration list for PBXNativeTarget "statusTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				7E57000000000000000000AB /* Debug */,
+				7E57000000000000000000AC /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
