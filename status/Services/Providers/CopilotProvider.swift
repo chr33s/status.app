@@ -16,7 +16,22 @@ private let log = Logger(subsystem: "app.status", category: "provider.copilot")
 /// `quota_snapshots.premium_interactions` block is the same number the CLI's
 /// `/usage` command displays.
 struct CopilotProvider: UsageProviding {
-    private let endpoint = URL(string: "https://api.github.com/copilot_internal/user")!
+    /// Performs a GET and returns the result, throwing `ProviderError.http` on
+    /// non-2xx. Injectable for tests.
+    typealias Transport = @Sendable (URL, [String: String]) async throws -> HTTPResult
+
+    static let endpoint = URL(string: "https://api.github.com/copilot_internal/user")!
+
+    private let transport: Transport
+    private let now: @Sendable () -> Date
+
+    init(
+        transport: @escaping Transport = { url, headers in try await HTTPClient.send(url, headers: headers) },
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
+        self.transport = transport
+        self.now = now
+    }
 
     func fetch(_ request: ProviderRequest) async throws -> UsageSnapshot {
         guard case let .oauth(token, accountID, displayName) = request.credential else {
@@ -36,7 +51,7 @@ struct CopilotProvider: UsageProviding {
         log.debug("fetching copilot_internal/user")
         let result: HTTPResult
         do {
-            result = try await HTTPClient.send(endpoint, headers: headers)
+            result = try await transport(Self.endpoint, headers)
         } catch {
             log.error("copilot_internal/user failed: \(error.localizedDescription, privacy: .public)")
             throw error
@@ -46,13 +61,7 @@ struct CopilotProvider: UsageProviding {
         var snapshot = UsageSnapshot()
         snapshot.planName = displayName ?? accountID ?? json["copilot_plan"].string ?? "Copilot"
 
-        let reset = json["quota_reset_date"].string.flatMap(Self.parseResetDate(_:))
-
-        // The CLI surfaces `premium_interactions` as "Premium requests"; chat
-        // and completions follow the same shape.
-        appendQuota(json["quota_snapshots"]["premium_interactions"], title: "Premium requests", reset: reset, into: &snapshot)
-        appendQuota(json["quota_snapshots"]["chat"], title: "Chat", reset: reset, into: &snapshot)
-        appendQuota(json["quota_snapshots"]["completions"], title: "Completions", reset: reset, into: &snapshot)
+        snapshot.sections = Self.sections(from: json, now: now())
 
         if snapshot.sections.isEmpty {
             log.notice("no quota_snapshots returned")
@@ -63,16 +72,27 @@ struct CopilotProvider: UsageProviding {
         return snapshot
     }
 
-    private func appendQuota(_ bucket: JSON, title: String, reset: Date?, into snapshot: inout UsageSnapshot) {
+    /// Maps `quota_snapshots` to meters. The CLI surfaces `premium_interactions`
+    /// as "Premium requests"; chat and completions follow the same shape.
+    static func sections(from json: JSON, now: Date = Date()) -> [UsageSection] {
+        let reset = json["quota_reset_date"].string.flatMap(parseResetDate(_:))
+        let quotas = json["quota_snapshots"]
+        return [
+            ("premium_interactions", "Premium requests"),
+            ("chat", "Chat"),
+            ("completions", "Completions"),
+        ].compactMap { key, title in
+            quotaSection(quotas[key], title: title, reset: reset, now: now)
+        }
+    }
+
+    private static func quotaSection(_ bucket: JSON, title: String, reset: Date?, now: Date) -> UsageSection? {
         // `unlimited: true` plans get a friendlier row with no meter.
         if bucket["unlimited"].value as? Bool == true {
-            snapshot.sections.append(UsageSection(
-                title: title, fraction: nil, leading: "Unlimited", trailing: nil
-            ))
-            return
+            return UsageSection(title: title, fraction: nil, leading: "Unlimited", trailing: nil)
         }
         guard let entitlement = bucket["entitlement"].double, entitlement > 0,
-              let remaining = bucket["remaining"].double else { return }
+              let remaining = bucket["remaining"].double else { return nil }
         let used = min(max(1 - remaining / entitlement, 0), 1)
         var section = UsageSection(
             title: title,
@@ -80,8 +100,8 @@ struct CopilotProvider: UsageProviding {
             leading: "\(Int(remaining.rounded())) / \(Int(entitlement.rounded())) left",
             trailing: nil
         )
-        if let reset { section.trailing = Format.resetCountdown(to: reset) }
-        snapshot.sections.append(section)
+        if let reset { section.trailing = Format.resetCountdown(to: reset, now: now) }
+        return section
     }
 
     /// `quota_reset_date` is a plain `YYYY-MM-DD` string in UTC.

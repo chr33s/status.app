@@ -18,9 +18,29 @@ private let log = Logger(subsystem: "app.status", category: "provider.gemini")
 /// fallback, otherwise show a friendly "signed in" note. When a bucket is full
 /// the API may omit `remainingAmount`/`remainingFraction`, which we treat as 0% used.
 struct GeminiProvider: UsageProviding {
-    private let base = URL(string: "https://cloudcode-pa.googleapis.com")!
-    private var loadURL: URL { base.appendingPathComponent("v1internal:loadCodeAssist") }
-    private var quotaURL: URL { base.appendingPathComponent("v1internal:retrieveUserQuota") }
+    /// Performs a POST and returns the result, throwing `ProviderError.http` on
+    /// non-2xx. Injectable for tests.
+    typealias Transport = @Sendable (URL, [String: String], Data) async throws -> HTTPResult
+
+    private static let base = URL(string: "https://cloudcode-pa.googleapis.com")!
+    static let loadURL = base.appendingPathComponent("v1internal:loadCodeAssist")
+    static let quotaURL = base.appendingPathComponent("v1internal:retrieveUserQuota")
+
+    private let transport: Transport
+    private let environment: [String: String]
+    private let now: @Sendable () -> Date
+
+    init(
+        transport: @escaping Transport = { url, headers, body in
+            try await HTTPClient.send(url, method: "POST", headers: headers, body: body)
+        },
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
+        self.transport = transport
+        self.environment = environment
+        self.now = now
+    }
 
     func fetch(_ request: ProviderRequest) async throws -> UsageSnapshot {
         guard case let .oauth(token, _, displayName) = request.credential else {
@@ -41,20 +61,13 @@ struct GeminiProvider: UsageProviding {
         let quotaBody = try JSONSerialization.data(withJSONObject: ["project": project])
         let result: HTTPResult
         do {
-            result = try await HTTPClient.send(
-                quotaURL, method: "POST",
-                headers: authHeaders(token),
-                body: quotaBody
-            )
+            result = try await transport(Self.quotaURL, authHeaders(token), quotaBody)
         } catch {
             log.error("retrieveUserQuota failed: \(error.localizedDescription, privacy: .public)")
             throw error
         }
-        for bucket in Self.quotaBuckets(in: result.json.value) {
-            if let section = section(from: bucket) {
-                snapshot.sections.append(section)
-            }
-        }
+        let now = now()
+        snapshot.sections = Self.quotaBuckets(in: result.json.value).map { Self.section(from: $0, now: now) }
         log.info("loaded \(snapshot.sections.count) quota bucket(s)")
         if snapshot.sections.isEmpty {
             snapshot.note = "Signed in via Gemini CLI. No per-model quota was returned for this account."
@@ -79,11 +92,7 @@ struct GeminiProvider: UsageProviding {
         log.debug("loadCodeAssist")
         let result: HTTPResult
         do {
-            result = try await HTTPClient.send(
-                loadURL, method: "POST",
-                headers: authHeaders(token),
-                body: body
-            )
+            result = try await transport(Self.loadURL, authHeaders(token), body)
         } catch {
             log.error("loadCodeAssist failed: \(error.localizedDescription, privacy: .public)")
             throw error
@@ -92,9 +101,8 @@ struct GeminiProvider: UsageProviding {
             log.debug("resolved project from loadCodeAssist")
             return project
         }
-        let env = ProcessInfo.processInfo.environment
         for key in ["GOOGLE_CLOUD_PROJECT", "GEMINI_PROJECT"] {
-            if let value = env[key], !value.isEmpty {
+            if let value = environment[key], !value.isEmpty {
                 log.debug("resolved project from env \(key, privacy: .public)")
                 return value
             }
@@ -106,7 +114,7 @@ struct GeminiProvider: UsageProviding {
         ["Authorization": "Bearer \(token)", "Content-Type": "application/json"]
     }
 
-    private func section(from bucket: JSON) -> UsageSection? {
+    static func section(from bucket: JSON, now: Date = Date()) -> UsageSection {
         let model = bucket["modelId"].string ?? bucket["model"].string ?? "Quota"
         // remainingFraction is the fraction *left*; when omitted, the bucket is full.
         let remaining = bucket["remainingFraction"].double ?? bucket["remaining_fraction"].double ?? 1
@@ -119,7 +127,7 @@ struct GeminiProvider: UsageProviding {
         )
         if let reset = bucket["resetTime"].string ?? bucket["quotaResetTime"].string,
            let date = SessionUsage.resetDate(from: reset) {
-            section.trailing = Format.resetCountdown(to: date)
+            section.trailing = Format.resetCountdown(to: date, now: now)
         }
         return section
     }

@@ -19,6 +19,25 @@ private let log = Logger(subsystem: "app.status", category: "provider.codex")
 /// the headers regardless of status, falling back to a "signed in" note only
 /// if no rate-limit headers are present.
 struct CodexProvider: UsageProviding {
+    /// Performs a POST and returns the result *without* throwing on non-2xx, so
+    /// headers on a 4xx can still be read. Injectable for tests.
+    typealias Transport = @Sendable (URL, [String: String], Data) async throws -> HTTPResult
+
+    static let endpoint = URL(string: "https://chatgpt.com/backend-api/codex/responses")!
+
+    private let transport: Transport
+    private let now: @Sendable () -> Date
+
+    init(
+        transport: @escaping Transport = { url, headers, body in
+            try await HTTPClient.send(url, method: "POST", headers: headers, body: body, failOnError: false)
+        },
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
+        self.transport = transport
+        self.now = now
+    }
+
     func fetch(_ request: ProviderRequest) async throws -> UsageSnapshot {
         guard case let .oauth(token, accountID, displayName) = request.credential else {
             log.notice("auth.json holds an API key, not OAuth")
@@ -39,10 +58,10 @@ struct CodexProvider: UsageProviding {
                 throw ProviderError.http(status: result.status, body: "")
             }
 
-            if let primary = Self.headerSection(title: "Session", prefix: "x-codex-primary", in: result) {
+            if let primary = Self.headerSection(title: "Session", prefix: "x-codex-primary", in: result, now: now()) {
                 snapshot.sections.append(primary)
             }
-            if let secondary = Self.headerSection(title: "Weekly", prefix: "x-codex-secondary", in: result) {
+            if let secondary = Self.headerSection(title: "Weekly", prefix: "x-codex-secondary", in: result, now: now()) {
                 snapshot.sections.append(secondary)
             }
             if snapshot.sections.isEmpty {
@@ -78,7 +97,6 @@ struct CodexProvider: UsageProviding {
     }
 
     private func probe(token: String, accountID: String?) async throws -> HTTPResult {
-        let url = URL(string: "https://chatgpt.com/backend-api/codex/responses")!
         var headers = [
             "Authorization": "Bearer \(token)",
             "Content-Type": "application/json",
@@ -101,13 +119,11 @@ struct CodexProvider: UsageProviding {
             "store": false,
         ])
 
-        return try await HTTPClient.send(
-            url, method: "POST", headers: headers, body: body, failOnError: false
-        )
+        return try await transport(Self.endpoint, headers, body)
     }
 
     /// Builds a meter from the `x-codex-{primary,secondary}-*` header trio.
-    static func headerSection(title: String, prefix: String, in result: HTTPResult) -> UsageSection? {
+    static func headerSection(title: String, prefix: String, in result: HTTPResult, now: Date = Date()) -> UsageSection? {
         guard let percent = result.header("\(prefix)-used-percent").flatMap(Double.init) else {
             return nil
         }
@@ -120,7 +136,7 @@ struct CodexProvider: UsageProviding {
         )
         if let resetAt = result.header("\(prefix)-reset-at"),
            let date = SessionUsage.resetDate(from: resetAt) {
-            section.trailing = Format.resetCountdown(to: date)
+            section.trailing = Format.resetCountdown(to: date, now: now)
         }
         return section
     }

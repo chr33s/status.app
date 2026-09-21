@@ -20,13 +20,30 @@ private let log = Logger(subsystem: "app.status", category: "provider.claude")
 /// (utilization is a 0-1 fraction, not a token count). If none are present we
 /// fall back to the standard request/token rate-limit headers.
 struct ClaudeProvider: UsageProviding {
-    private let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
+    /// Performs a POST and returns the result, throwing `ProviderError.http` on
+    /// non-2xx. Injectable for tests.
+    typealias Transport = @Sendable (URL, [String: String], Data) async throws -> HTTPResult
+
+    static let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
     /// Haiku 4.5 — the cheapest model the OAuth path currently accepts.
     /// Older dated Haiku 3.5 IDs return `not_found_error` (404) on OAuth.
     private let probeModel = "claude-haiku-4-5"
     /// The first system block MUST start with this exact string; Anthropic's
     /// OAuth allow-list keys off it.
     private let probeSystem = "You are Claude Code, Anthropic's official CLI for Claude."
+
+    private let transport: Transport
+    private let now: @Sendable () -> Date
+
+    init(
+        transport: @escaping Transport = { url, headers, body in
+            try await HTTPClient.send(url, method: "POST", headers: headers, body: body)
+        },
+        now: @escaping @Sendable () -> Date = Date.init
+    ) {
+        self.transport = transport
+        self.now = now
+    }
 
     func fetch(_ request: ProviderRequest) async throws -> UsageSnapshot {
         guard case let .oauth(token, _, displayName) = request.credential else {
@@ -52,10 +69,10 @@ struct ClaudeProvider: UsageProviding {
             "messages": [["role": "user", "content": "ping"]],
         ])
 
-        log.debug("probing \(endpoint.absoluteString, privacy: .public)")
+        log.debug("probing \(Self.endpoint.absoluteString, privacy: .public)")
         let result: HTTPResult
         do {
-            result = try await HTTPClient.send(endpoint, method: "POST", headers: headers, body: body)
+            result = try await transport(Self.endpoint, headers, body)
         } catch {
             log.error("probe failed: \(error.localizedDescription, privacy: .public)")
             throw error
@@ -64,35 +81,7 @@ struct ClaudeProvider: UsageProviding {
 
         var snapshot = UsageSnapshot()
         snapshot.planName = displayName ?? "Claude Code"
-
-        // 5-hour session window — `utilization` is a 0-1 fraction.
-        if let session = SessionUsage.utilizationSection(
-            title: "Session",
-            utilization: number(result, "anthropic-ratelimit-unified-5h-utilization"),
-            reset: result.header("anthropic-ratelimit-unified-5h-reset")
-        ) {
-            snapshot.sections.append(session)
-        }
-
-        // 7-day weekly window.
-        if let weekly = SessionUsage.utilizationSection(
-            title: "Weekly",
-            utilization: number(result, "anthropic-ratelimit-unified-7d-utilization"),
-            reset: result.header("anthropic-ratelimit-unified-7d-reset")
-        ) {
-            snapshot.sections.append(weekly)
-        }
-
-        // Fallback: legacy request/token rate-limit headers (API-key callers).
-        if snapshot.sections.isEmpty,
-           let generic = SessionUsage.limitSection(
-               title: "Rate limit",
-               limit: number(result, "anthropic-ratelimit-requests-limit"),
-               remaining: number(result, "anthropic-ratelimit-requests-remaining"),
-               reset: result.header("anthropic-ratelimit-requests-reset")
-           ) {
-            snapshot.sections.append(generic)
-        }
+        snapshot.sections = Self.sections(from: result, now: now())
 
         if snapshot.sections.isEmpty {
             let status = result.header("anthropic-ratelimit-unified-status") ?? "active"
@@ -104,7 +93,46 @@ struct ClaudeProvider: UsageProviding {
         return snapshot
     }
 
-    private func number(_ result: HTTPResult, _ name: String) -> Double? {
+    /// Maps the probe's rate-limit headers to Session / Weekly meters, falling
+    /// back to the legacy request limit when no unified headers are present.
+    static func sections(from result: HTTPResult, now: Date = Date()) -> [UsageSection] {
+        var sections: [UsageSection] = []
+
+        // 5-hour session window — `utilization` is a 0-1 fraction.
+        if let session = SessionUsage.utilizationSection(
+            title: "Session",
+            utilization: number(result, "anthropic-ratelimit-unified-5h-utilization"),
+            reset: result.header("anthropic-ratelimit-unified-5h-reset"),
+            now: now
+        ) {
+            sections.append(session)
+        }
+
+        // 7-day weekly window.
+        if let weekly = SessionUsage.utilizationSection(
+            title: "Weekly",
+            utilization: number(result, "anthropic-ratelimit-unified-7d-utilization"),
+            reset: result.header("anthropic-ratelimit-unified-7d-reset"),
+            now: now
+        ) {
+            sections.append(weekly)
+        }
+
+        // Fallback: legacy request/token rate-limit headers (API-key callers).
+        if sections.isEmpty,
+           let generic = SessionUsage.limitSection(
+               title: "Rate limit",
+               limit: number(result, "anthropic-ratelimit-requests-limit"),
+               remaining: number(result, "anthropic-ratelimit-requests-remaining"),
+               reset: result.header("anthropic-ratelimit-requests-reset"),
+               now: now
+           ) {
+            sections.append(generic)
+        }
+        return sections
+    }
+
+    private static func number(_ result: HTTPResult, _ name: String) -> Double? {
         result.header(name).flatMap(Double.init)
     }
 }

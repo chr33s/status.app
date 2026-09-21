@@ -38,7 +38,7 @@ enum SessionUsage {
 
     /// Builds a meter from `limit` / `remaining` / `reset` values (Anthropic's
     /// legacy rate-limit headers, still used for API-key callers).
-    static func limitSection(title: String, limit: Double?, remaining: Double?, reset: String?) -> UsageSection? {
+    static func limitSection(title: String, limit: Double?, remaining: Double?, reset: String?, now: Date = Date()) -> UsageSection? {
         guard let limit, limit > 0, let remaining else { return nil }
         let used = max(0, limit - remaining)
         let fraction = min(max(used / limit, 0), 1)
@@ -49,7 +49,7 @@ enum SessionUsage {
             trailing: nil
         )
         if let date = resetDate(from: reset) {
-            section.trailing = Format.resetCountdown(to: date)
+            section.trailing = Format.resetCountdown(to: date, now: now)
         }
         return section
     }
@@ -57,7 +57,7 @@ enum SessionUsage {
     /// Builds a meter from a single `utilization` fraction (0-1) and reset
     /// time — Anthropic's current Claude Code unified rate-limit headers
     /// (`anthropic-ratelimit-unified-{5h,7d}-utilization`).
-    static func utilizationSection(title: String, utilization: Double?, reset: String?) -> UsageSection? {
+    static func utilizationSection(title: String, utilization: Double?, reset: String?, now: Date = Date()) -> UsageSection? {
         guard let utilization else { return nil }
         let fraction = min(max(utilization, 0), 1)
         var section = UsageSection(
@@ -67,7 +67,7 @@ enum SessionUsage {
             trailing: nil
         )
         if let date = resetDate(from: reset) {
-            section.trailing = Format.resetCountdown(to: date)
+            section.trailing = Format.resetCountdown(to: date, now: now)
         }
         return section
     }
