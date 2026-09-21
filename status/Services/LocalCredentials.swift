@@ -43,13 +43,24 @@ enum LocalCredentials {
     /// Exchanges the refresh token for a new access token and writes it back to
     /// the CLI's store. Returns nil when there's no refresh token to use.
     ///
-    /// Drops the in-memory Keychain cache first so an out-of-band rotation by
-    /// the Claude Code CLI is picked up here rather than wedging us on a stale
-    /// refresh token.
+    /// Tries the cached Keychain copy first: the fresh Keychain read is what
+    /// can raise a permission dialog, so it's reserved for the case where the
+    /// cached refresh token no longer works (e.g. the Claude Code CLI rotated
+    /// it out-of-band) rather than paid on every expired access token.
     static func forceRefresh(_ provider: Provider) async -> Credential? {
-        if provider == .claude {
-            keychainLock.withLock { cachedClaudeKeychain = nil }
+        if let credential = await refreshFromStore(provider) { return credential }
+        guard provider == .claude else { return nil }
+        let hadCache = keychainLock.withLock {
+            let had = cachedClaudeKeychain != nil
+            cachedClaudeKeychain = nil
+            return had
         }
+        // Without a cache the attempt above already read the store fresh.
+        guard hadCache else { return nil }
+        return await refreshFromStore(provider)
+    }
+
+    private static func refreshFromStore(_ provider: Provider) async -> Credential? {
         guard let loaded = load(provider), loaded.refresh != nil,
               let refreshed = try? await refresh(loaded) else { return nil }
         return .oauth(accessToken: refreshed.access, accountID: refreshed.accountID, displayName: refreshed.displayName)
@@ -110,8 +121,9 @@ enum LocalCredentials {
 
     /// Serializes Keychain reads/writes so concurrent refreshes can't stack
     /// permission prompts, and caches the decoded JSON so subsequent syncs
-    /// read from memory instead of re-prompting when the "Always Allow" ACL
-    /// fails to stick across builds.
+    /// read from memory. Each fresh read can prompt when the process fails
+    /// dynamic code-signature validation (e.g. running under the debugger),
+    /// so reads are kept to launch and refresh-token failure.
     private static let keychainLock = NSLock()
     private static var cachedClaudeKeychain: [String: Any]?
 
