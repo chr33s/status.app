@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import WidgetKit
 
 /// Owns per-provider load state, the selected tab, and the refresh schedule.
 ///
@@ -46,6 +47,25 @@ final class UsageStore {
         }
         lastRefresh = Date()
         autoSelectFirstConfigured()
+        publishToWidgets()
+    }
+
+    /// Mirrors the latest snapshots into the App Group container and pokes the
+    /// widget. The widget can't fetch on its own (separate sandbox, no way to
+    /// show the Keychain consent dialog), so it renders whatever the app last
+    /// published.
+    private func publishToWidgets() {
+        let providers = Provider.allCases.compactMap { provider -> SharedProviderUsage? in
+            let state = state(for: provider)
+            guard state.isConfigured else { return nil }
+            return SharedProviderUsage(
+                provider: provider,
+                snapshot: state.snapshot,
+                needsAttention: state.needsAttention
+            )
+        }
+        SharedUsage.write(SharedUsagePayload(updatedAt: Date(), providers: providers))
+        WidgetCenter.shared.reloadTimelines(ofKind: SharedUsage.widgetKind)
     }
 
     /// The first time any provider is signed in, switch to it if the current
@@ -97,7 +117,10 @@ final class UsageStore {
 
     /// Called by the settings UI / re-check actions.
     func reload(_ provider: Provider) {
-        Task { await refresh(provider) }
+        Task {
+            await refresh(provider)
+            publishToWidgets()
+        }
     }
 
     // MARK: Auto refresh

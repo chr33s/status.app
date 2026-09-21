@@ -1,8 +1,9 @@
 import Foundation
 
 /// A single labelled usage meter, e.g. "Session", "Weekly", "Spend".
-struct UsageSection: Identifiable, Hashable, Sendable {
-    let id = UUID()
+/// Codable so snapshots can be handed to the widget via the App Group.
+struct UsageSection: Identifiable, Hashable, Sendable, Codable {
+    var id = UUID()
     var title: String
     /// 0...1 fill for the progress bar. `nil` hides the bar.
     var fraction: Double?
@@ -15,7 +16,7 @@ struct UsageSection: Identifiable, Hashable, Sendable {
 }
 
 /// Everything needed to render one provider's detail panel.
-struct UsageSnapshot: Sendable {
+struct UsageSnapshot: Sendable, Codable {
     var planName: String?
     var sections: [UsageSection] = []
     /// Free-form note shown when there are no meters.
