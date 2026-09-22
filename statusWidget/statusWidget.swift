@@ -37,17 +37,18 @@ extension SharedUsagePayload {
     static let placeholder = SharedUsagePayload(
         updatedAt: Date(),
         providers: [
-            .init(provider: .codex, snapshot: demo(0.35), needsAttention: false),
-            .init(provider: .claude, snapshot: demo(0.62), needsAttention: false),
-            .init(provider: .antigravity, snapshot: demo(0.12), needsAttention: false),
-            .init(provider: .copilot, snapshot: demo(0.80), needsAttention: false),
+            .init(provider: .codex, snapshot: demo(session: 0.35, weekly: 0.55), needsAttention: false),
+            .init(provider: .claude, snapshot: demo(session: 0.62, weekly: 0.40), needsAttention: false),
+            .init(provider: .antigravity, snapshot: demo(session: 0.12, weekly: 0.30), needsAttention: false),
+            .init(provider: .copilot, snapshot: demo(session: 0.80, weekly: 0.65), needsAttention: false),
         ]
     )
 
-    private static func demo(_ fraction: Double) -> UsageSnapshot {
+    private static func demo(session: Double, weekly: Double) -> UsageSnapshot {
         var snapshot = UsageSnapshot()
         snapshot.sections = [
-            UsageSection(title: "Session", fraction: fraction, leading: Format.percentUsed(fraction))
+            UsageSection(title: "Session", fraction: session, leading: Format.percentUsed(session)),
+            UsageSection(title: "Weekly", fraction: weekly, leading: Format.percentUsed(weekly)),
         ]
         return snapshot
     }
@@ -96,38 +97,87 @@ struct QuotaGridView: View {
     }
 }
 
-/// One provider's ring: fill = peak meter fraction, brand tint, glyph centre.
+/// One provider's meters as concentric rings — outer = weekly quota, inner =
+/// session quota — with the brand glyph in the centre. Providers reporting a
+/// single meter (or none) fall back to one ring.
 struct QuotaRing: View {
     let usage: SharedProviderUsage
 
-    private var fraction: Double {
-        min(max(usage.snapshot?.peakFraction ?? 0, 0), 1)
+    /// First weekly meter — the outer ring.
+    private var weekly: Double? {
+        fraction { $0.localizedCaseInsensitiveContains("week") }
+    }
+
+    /// First non-weekly meter (Session, Rate limit, …) — the inner ring.
+    private var session: Double? {
+        fraction { !$0.localizedCaseInsensitiveContains("week") }
+    }
+
+    private func fraction(where titleMatches: (String) -> Bool) -> Double? {
+        usage.snapshot?.sections
+            .first { titleMatches($0.title) && $0.fraction != nil }?
+            .fraction
+            .map { min(max($0, 0), 1) }
     }
 
     var body: some View {
-        Gauge(value: fraction) {
-            Text(usage.provider.displayName)
-        } currentValueLabel: {
+        ZStack {
+            Group {
+                if let session, let weekly {
+                    Ring(fraction: weekly, lineWidth: 6)
+                    Ring(fraction: session, lineWidth: 3.5)
+                        .padding(9)
+                } else {
+                    Ring(fraction: weekly ?? session ?? 0, lineWidth: 6)
+                }
+            }
+            // Same 6pt stroke inset 3pt as `EmptySlot`, i.e. the old gauge size.
+            .padding(3)
+            .foregroundStyle(usage.needsAttention ? Color.orange : usage.provider.accentColor)
+
             if usage.needsAttention {
                 Image(systemName: "exclamationmark")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
             } else {
                 // Same template brand glyph the menu's tab strip uses; the
                 // imagesets are symlinked into this target's asset catalog.
                 Image(usage.provider.assetIcon)
                     .resizable()
                     .scaledToFit()
-                    .frame(width: 15, height: 15)
+                    .frame(width: 12, height: 12)
             }
         }
-        .gaugeStyle(.accessoryCircularCapacity)
-        .tint(usage.needsAttention ? .orange : usage.provider.accentColor)
+        .aspectRatio(1, contentMode: .fit)
+        .accessibilityElement()
         .accessibilityLabel(usage.provider.displayName)
-        .accessibilityValue(
-            usage.needsAttention
-                ? "Needs re-authentication"
-                : "\(Int((fraction * 100).rounded())) percent used"
-        )
+        .accessibilityValue(accessibilityValue)
+    }
+
+    private var accessibilityValue: String {
+        if usage.needsAttention { return "Needs re-authentication" }
+        var parts: [String] = []
+        if let session { parts.append("session \(Int((session * 100).rounded())) percent used") }
+        if let weekly { parts.append("weekly \(Int((weekly * 100).rounded())) percent used") }
+        return parts.isEmpty ? "No usage data" : parts.joined(separator: ", ")
+    }
+}
+
+/// A capacity ring: dimmed full-circle track under a solid fill arc that
+/// starts at 12 o'clock. Both derive their colour from the foreground style.
+private struct Ring: View {
+    let fraction: Double
+    let lineWidth: CGFloat
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(.quaternary, lineWidth: lineWidth)
+            Circle()
+                .trim(from: 0, to: fraction)
+                .stroke(style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+        }
+        .padding(lineWidth / 2)
     }
 }
 
