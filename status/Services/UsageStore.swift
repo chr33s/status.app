@@ -83,6 +83,9 @@ final class UsageStore {
         if case .needsReauth = states[provider] {
             LocalCredentials.resetCache(for: provider)
         }
+        // Kept so a fetch that ends in needsReauth can still show the last
+        // good usage (marked stale) instead of dropping to an empty prompt.
+        let lastSnapshot = states[provider]?.snapshot
         guard let credential = await LocalCredentials.credential(for: provider) else {
             states[provider] = .notConfigured
             return
@@ -94,19 +97,19 @@ final class UsageStore {
             states[provider] = .loaded(try await fetch(impl, credential))
         } catch let error as ProviderError where error.isUnauthorized {
             // Token expired/invalid: try one forced refresh + retry, else prompt re-auth.
-            if let refreshed = await LocalCredentials.forceRefresh(provider) {
+            if let refreshed = await LocalCredentials.forceRefresh(provider, after: credential) {
                 do {
                     states[provider] = .loaded(try await fetch(impl, refreshed))
                 } catch let retry as ProviderError where retry.isUnauthorized {
-                    states[provider] = .needsReauth(reauthMessage(provider))
+                    states[provider] = .needsReauth(reauthMessage(provider), stale: lastSnapshot)
                 } catch {
-                    states[provider] = .failed(error.localizedDescription)
+                    states[provider] = .failed(error.localizedDescription, stale: lastSnapshot)
                 }
             } else {
-                states[provider] = .needsReauth(reauthMessage(provider))
+                states[provider] = .needsReauth(reauthMessage(provider), stale: lastSnapshot)
             }
         } catch {
-            states[provider] = .failed(error.localizedDescription)
+            states[provider] = .failed(error.localizedDescription, stale: lastSnapshot)
         }
     }
 
@@ -115,7 +118,12 @@ final class UsageStore {
     }
 
     private func reauthMessage(_ provider: Provider) -> String {
-        "Your \(provider.cliName) session has expired or is invalid. Re-authenticate to continue."
+        if provider == .claude {
+            // We never refresh Claude's single-use token ourselves; any CLI
+            // session rotates it and the next refresh picks it up.
+            return "Claude Code's session token has expired. Using \(provider.cliName) refreshes it automatically — or re-authenticate now."
+        }
+        return "Your \(provider.cliName) session has expired or is invalid. Re-authenticate to continue."
     }
 
     /// Called by the settings UI / re-check actions.

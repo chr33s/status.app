@@ -110,7 +110,7 @@ struct ProviderStatusCard: View {
         case .needsReauth:
             Label("Session expired — re-authenticate", systemImage: "exclamationmark.triangle.fill")
                 .font(.caption).foregroundStyle(.orange)
-        case .failed(let message):
+        case .failed(let message, _):
             Text(message).font(.caption).foregroundStyle(.secondary)
                 .lineLimit(2).fixedSize(horizontal: false, vertical: true)
         }

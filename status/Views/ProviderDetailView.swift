@@ -17,18 +17,24 @@ struct ProviderDetailView: View {
             case .loading:
                 header(plan: nil, subtitle: "Updating…")
                 ProgressView().controlSize(.small)
-            case .needsReauth(let message):
+            case .needsReauth(let message, let stale):
                 reauthPrompt(
                     subtitle: "Session expired",
                     message: message,
                     buttonTitle: "Re-authenticate"
                 )
-            case .failed(let message):
+                if let stale {
+                    staleUsage(stale)
+                }
+            case .failed(let message, let stale):
                 header(plan: nil, subtitle: "Couldn't update")
                 Text(message)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                if let stale {
+                    staleUsage(stale)
+                }
             case .loaded(let snapshot):
                 loaded(snapshot)
             }
@@ -55,6 +61,24 @@ struct ProviderDetailView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(provider.accentColor)
+        }
+    }
+
+    /// The last good snapshot, shown under the re-auth prompt so expired
+    /// credentials don't blank out the meters.
+    @ViewBuilder
+    private func staleUsage(_ snapshot: UsageSnapshot) -> some View {
+        Divider()
+        HStack(alignment: .firstTextBaseline) {
+            Text("Last known usage")
+                .font(.headline)
+            Spacer()
+            Text(Format.updated(snapshot.fetchedAt))
+                .font(.footnote)
+                .foregroundStyle(.tertiary)
+        }
+        ForEach(snapshot.sections) { section in
+            SectionView(section: section, tint: provider.accentColor)
         }
     }
 

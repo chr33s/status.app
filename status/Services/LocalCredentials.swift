@@ -13,11 +13,16 @@ import Security
 /// The OAuth client ids / token endpoints / stored JSON shapes below are
 /// observed from the CLIs and may change between releases; they're isolated
 /// here. On a refresh we write the rotated token back to the same store so the
-/// CLI stays consistent, and fall back to the existing token on failure.
+/// CLI stays consistent (checking the store is writable first, and re-reading
+/// it before exchanging in case the CLI already rotated the token itself).
+///
+/// Claude Code is the exception: its refresh token is single-use, so exchanging
+/// it here races the CLI (logging it out), and writing the rotated token back
+/// via SecItemUpdate resets the Keychain item's access grants — every
+/// `security`-tool read the CLI makes starts prompting again. We never refresh
+/// or write Claude's credentials; on 401 we just re-read what the CLI stored.
 enum LocalCredentials {
     // Observed public OAuth clients for the CLIs.
-    private static let claudeClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-    private static let claudeTokenURL = URL(string: "https://console.anthropic.com/v1/oauth/token")!
     private static let codexClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
     private static let codexTokenURL = URL(string: "https://auth.openai.com/oauth/token")!
     // Antigravity's installed-app OAuth client (shipped in every copy of the app,
@@ -62,24 +67,65 @@ enum LocalCredentials {
     ///
     /// Tries the cached Keychain copy first: the fresh Keychain read is what
     /// can raise a permission dialog, so it's reserved for the case where the
-    /// cached refresh token no longer works (e.g. the Claude Code CLI rotated
-    /// it out-of-band) rather than paid on every expired access token.
-    static func forceRefresh(_ provider: Provider) async -> Credential? {
-        if let credential = await refreshFromStore(provider) { return credential }
-        guard provider == .claude || provider == .antigravity else { return nil }
-        let hadCache = keychainLock.withLock {
-            let had = provider == .claude ? cachedClaudeKeychain != nil : cachedAntigravityKeychain != nil
-            if provider == .claude {
-                cachedClaudeKeychain = nil
-            } else {
+    /// cached refresh token no longer works rather than paid on every expired
+    /// access token.
+    ///
+    /// Claude is never refreshed here — its refresh token is single-use and
+    /// owned by the CLI (see the type doc). Codex and Grok re-read their auth
+    /// file first for the same reason: the CLI may have already rotated the
+    /// token, and exchanging a refresh token it still holds would race it.
+    ///
+    /// `failed` is the credential that just 401'd, so a re-read can tell a
+    /// rotated token apart from the same stale one.
+    static func forceRefresh(_ provider: Provider, after failed: Credential? = nil) async -> Credential? {
+        let failedAccess = oauthAccessToken(failed)
+        switch provider {
+        case .claude:
+            return rereadClaude(failedAccess: failedAccess)
+        case .codex, .grok:
+            // File reads are free (no permission dialog), so always look for a
+            // CLI-rotated token before spending our own refresh exchange.
+            if let loaded = load(provider), loaded.apiKey == nil, !loaded.access.isEmpty,
+               loaded.access != failedAccess {
+                return .oauth(accessToken: loaded.access, accountID: loaded.accountID, displayName: loaded.displayName)
+            }
+            return await refreshFromStore(provider)
+        case .antigravity:
+            // Google refresh tokens are reusable, so exchanging is safe; try
+            // the cached Keychain copy first because the fresh read is what
+            // can raise a permission dialog.
+            if let credential = await refreshFromStore(provider) { return credential }
+            let hadCache = keychainLock.withLock {
+                let had = cachedAntigravityKeychain != nil
                 cachedAntigravityKeychain = nil
                 refreshedAntigravity = nil
+                return had
             }
-            return had
+            // Without a cache the attempt above already read the store fresh.
+            guard hadCache else { return nil }
+            return await refreshFromStore(provider)
+        case .copilot:
+            // No refresh token; a 401 means the gh login itself is stale.
+            return nil
         }
-        // Without a cache the attempt above already read the store fresh.
-        guard hadCache else { return nil }
-        return await refreshFromStore(provider)
+    }
+
+    private static func oauthAccessToken(_ credential: Credential?) -> String? {
+        if case let .oauth(accessToken, _, _) = credential { return accessToken }
+        return nil
+    }
+
+    /// Drops the cached Claude Keychain copy and reads the store again. Returns
+    /// nil when the store still holds the access token that just 401'd — no
+    /// point retrying it; the caller surfaces re-auth instead.
+    private static func rereadClaude(failedAccess: String?) -> Credential? {
+        let cachedAccess = keychainLock.withLock { () -> String? in
+            defer { cachedClaudeKeychain = nil }
+            return cachedClaudeKeychain.flatMap { parseClaude($0, source: .claudeKeychain)?.access }
+        }
+        let stale = failedAccess ?? cachedAccess
+        guard let loaded = loadClaude(), !loaded.access.isEmpty, loaded.access != stale else { return nil }
+        return .oauth(accessToken: loaded.access, accountID: loaded.accountID, displayName: loaded.displayName)
     }
 
     private static func refreshFromStore(_ provider: Provider) async -> Credential? {
@@ -359,9 +405,17 @@ enum LocalCredentials {
 
     private static func refresh(_ loaded: Loaded) async throws -> Loaded {
         guard let refreshToken = loaded.refresh else { return loaded }
+        // Exchanging may rotate (and invalidate) the refresh token, so never
+        // start one we can't write back — that would strand the CLI with a
+        // dead token and log it out.
+        if let file = authFile(loaded.source),
+           !FileManager.default.isWritableFile(atPath: file.path) {
+            throw CocoaError(.fileWriteNoPermission)
+        }
         switch loaded.source {
         case .claudeKeychain, .claudeFile:
-            return try await refreshClaude(loaded, refreshToken: refreshToken)
+            // Never exchanged: the CLI owns Claude's single-use refresh token.
+            return loaded
         case .codexFile:
             return try await refreshCodex(loaded, refreshToken: refreshToken)
         case .antigravityKeychain:
@@ -371,28 +425,6 @@ enum LocalCredentials {
         case .copilotConfig:
             return loaded
         }
-    }
-
-    private static func refreshClaude(_ loaded: Loaded, refreshToken: String) async throws -> Loaded {
-        let body = try JSONSerialization.data(withJSONObject: [
-            "grant_type": "refresh_token", "refresh_token": refreshToken, "client_id": claudeClientID,
-        ])
-        let result = try await HTTPClient.send(claudeTokenURL, method: "POST",
-            headers: ["Content-Type": "application/json"], body: body)
-        guard let access = result.json["access_token"].string else { return loaded }
-
-        var updated = loaded
-        updated.access = access
-        updated.refresh = result.json["refresh_token"].string ?? loaded.refresh
-        var oauth = (updated.raw["claudeAiOauth"] as? [String: Any]) ?? [:]
-        oauth["accessToken"] = updated.access
-        if let refresh = updated.refresh { oauth["refreshToken"] = refresh }
-        if let expiresIn = result.json["expires_in"].double {
-            oauth["expiresAt"] = Date().addingTimeInterval(expiresIn).timeIntervalSince1970 * 1000
-        }
-        updated.raw["claudeAiOauth"] = oauth
-        persist(updated.raw, to: updated.source)
-        return updated
     }
 
     private static func refreshCodex(_ loaded: Loaded, refreshToken: String) async throws -> Loaded {
@@ -470,30 +502,27 @@ enum LocalCredentials {
 
     // MARK: Write-back
 
-    private static func persist(_ raw: [String: Any], to source: Source) {
-        let pretty = source == .codexFile || source == .grokFile
-        guard let data = try? JSONSerialization.data(
-            withJSONObject: raw,
-            options: pretty ? .prettyPrinted : []
-        ) else { return }
+    /// Returns whether the rotated tokens actually reached the CLI's store.
+    @discardableResult
+    private static func persist(_ raw: [String: Any], to source: Source) -> Bool {
+        guard let file = authFile(source),
+              let data = try? JSONSerialization.data(withJSONObject: raw, options: .prettyPrinted)
+        else { return false }
+        do {
+            try data.write(to: file, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// The CLI auth file a refreshed token is written back to; nil for sources
+    /// that are never written (Claude, Antigravity, Copilot).
+    private static func authFile(_ source: Source) -> URL? {
         switch source {
-        case .claudeKeychain:
-            let query: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: "Claude Code-credentials",
-            ]
-            keychainLock.lock()
-            SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-            cachedClaudeKeychain = raw
-            keychainLock.unlock()
-        case .claudeFile:
-            try? data.write(to: home.appendingPathComponent(".claude/.credentials.json"), options: .atomic)
-        case .codexFile:
-            try? data.write(to: home.appendingPathComponent(".codex/auth.json"), options: .atomic)
-        case .grokFile:
-            try? data.write(to: home.appendingPathComponent(".grok/auth.json"), options: .atomic)
-        case .antigravityKeychain, .copilotConfig:
-            break
+        case .codexFile: return home.appendingPathComponent(".codex/auth.json")
+        case .grokFile: return home.appendingPathComponent(".grok/auth.json")
+        case .claudeKeychain, .claudeFile, .antigravityKeychain, .copilotConfig: return nil
         }
     }
 
