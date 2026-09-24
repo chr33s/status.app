@@ -9,11 +9,19 @@ struct MenuBarLabel: View {
 
     var body: some View {
         Group {
-            if settings.showMenuBarBadge, let peak = store.peakFraction {
-                Label("\(Int((peak * 100).rounded()))%", systemImage: "chart.bar.fill")
+            if let peak = store.peakFraction {
+                if settings.showMenuBarBadge {
+                    Label {
+                        Text("\(Int((peak * 100).rounded()))%")
+                    } icon: {
+                        Image(nsImage: MenuBarGauge.image(usage: peak))
+                    }
                     .labelStyle(.titleAndIcon)
+                } else {
+                    Image(nsImage: MenuBarGauge.image(usage: peak))
+                }
             } else {
-                Image(systemName: "chart.bar.fill")
+                Image("MenuBarIcon")
             }
         }
         .task {
