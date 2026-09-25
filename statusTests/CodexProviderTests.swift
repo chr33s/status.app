@@ -29,6 +29,19 @@ struct CodexProviderTests {
         #expect(section.trailing == "Resets in 2h 30m")
     }
 
+    @Test func headerSectionsUseWindowDurationWhenOrderIsInverted() throws {
+        let sections = CodexProvider.headerSections(in: .stub(headers: [
+            "x-codex-primary-used-percent": "60",
+            "x-codex-primary-window-minutes": "10080",
+            "x-codex-secondary-used-percent": "20",
+            "x-codex-secondary-window-minutes": "300",
+        ]), now: testNow)
+
+        #expect(sections.map(\.title) == ["Session", "Weekly"])
+        #expect(try #require(sections.first).fraction == 0.20)
+        #expect(try #require(sections.last).fraction == 0.60)
+    }
+
     @Test func headerSectionIsClamped() {
         let section = CodexProvider.headerSection(
             title: "Weekly", prefix: "x-codex-secondary",

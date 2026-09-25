@@ -9,10 +9,11 @@ private let log = Logger(subsystem: "app.status", category: "provider.codex")
 /// The Codex back-end emits the account's rate-limit state as **response
 /// headers** on `POST /backend-api/codex/responses` (per
 /// `codex-rs/codex-api/src/sse/responses.rs`):
-///   • `x-codex-primary-used-percent`       (Session, ≈5h)
-///   • `x-codex-primary-window-minutes`
-///   • `x-codex-primary-reset-at`
-///   • `x-codex-secondary-*`                (Weekly, ≈7d)
+///   • `x-codex-primary-*`
+///   • `x-codex-secondary-*`
+/// Each group includes `used-percent`, `window-minutes`, and `reset-at`.
+/// The window duration determines whether a group is Session or Weekly; the
+/// backend does not guarantee that primary and secondary keep those meanings.
 /// Crucially these headers are set on the initial HTTP response — *before* the
 /// SSE body is consumed and even when the body itself 4xx's (e.g. an
 /// unsupported model). We therefore use a deliberately minimal probe and read
@@ -58,12 +59,7 @@ struct CodexProvider: UsageProviding {
                 throw ProviderError.http(status: result.status, body: "")
             }
 
-            if let primary = Self.headerSection(title: "Session", prefix: "x-codex-primary", in: result, now: now()) {
-                snapshot.sections.append(primary)
-            }
-            if let secondary = Self.headerSection(title: "Weekly", prefix: "x-codex-secondary", in: result, now: now()) {
-                snapshot.sections.append(secondary)
-            }
+            snapshot.sections = Self.headerSections(in: result, now: now())
             if snapshot.sections.isEmpty {
                 // No rate-limit headers in this response — dump everything
                 // suggestive so we can diagnose which keys the backend uses.
@@ -122,7 +118,24 @@ struct CodexProvider: UsageProviding {
         return try await transport(Self.endpoint, headers, body)
     }
 
-    /// Builds a meter from the `x-codex-{primary,secondary}-*` header trio.
+    /// Builds the Codex meters, using their window duration instead of assuming
+    /// the primary/secondary order. Responses without window metadata retain
+    /// the legacy primary-session, secondary-weekly mapping.
+    static func headerSections(in result: HTTPResult, now: Date = Date()) -> [UsageSection] {
+        let limits = [
+            (prefix: "x-codex-primary", fallbackTitle: "Session"),
+            (prefix: "x-codex-secondary", fallbackTitle: "Weekly"),
+        ]
+
+        return limits.compactMap { limit in
+            let minutes = result.header("\(limit.prefix)-window-minutes").flatMap(Double.init)
+            let title = minutes.map { $0 < 24 * 60 ? "Session" : "Weekly" } ?? limit.fallbackTitle
+            return headerSection(title: title, prefix: limit.prefix, in: result, now: now)
+        }
+        .sorted { $0.title == "Session" && $1.title != "Session" }
+    }
+
+    /// Builds a meter from one `x-codex-{primary,secondary}-*` header trio.
     static func headerSection(title: String, prefix: String, in result: HTTPResult, now: Date = Date()) -> UsageSection? {
         guard let percent = result.header("\(prefix)-used-percent").flatMap(Double.init) else {
             return nil

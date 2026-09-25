@@ -1,0 +1,9 @@
+{
+  "id" : "bf006cde-6fd8-496c-b4f3-57441d60d6ac",
+  "targets" : [
+    {
+      "id" : "576cc387-52af-495a-9bab-9528e51072b9",
+      "name" : "status"
+    }
+  ]
+}
