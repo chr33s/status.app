@@ -2,6 +2,11 @@ import Foundation
 
 /// Lifecycle of a single provider's usage fetch.
 enum LoadState: Sendable {
+    /// Status can't look for the CLI login because the user hasn't granted
+    /// (or has lost) access to the CLI's folder. Distinct from `notConfigured`:
+    /// the user may well be signed in. `lost` is true when an earlier grant
+    /// stopped working and must be given again.
+    case authorizationRequired(ExternalResource, lost: Bool)
     /// No CLI login found at all.
     case notConfigured
     case loading
@@ -24,14 +29,16 @@ enum LoadState: Sendable {
 
     /// True once a CLI login exists (even if it now needs re-auth).
     var isConfigured: Bool {
-        if case .notConfigured = self { return false }
-        return true
+        switch self {
+        case .notConfigured, .authorizationRequired: return false
+        default: return true
+        }
     }
 
     /// True for states that should surface a re-authenticate affordance.
     var needsAttention: Bool {
         switch self {
-        case .notConfigured, .needsReauth, .failed: return true
+        case .authorizationRequired, .notConfigured, .needsReauth, .failed: return true
         default: return false
         }
     }

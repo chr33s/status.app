@@ -47,7 +47,7 @@ struct ProvidersSettingsView: View {
                 ForEach(Provider.allCases) { provider in
                     ProviderStatusCard(provider: provider, state: store.state(for: provider))
                 }
-                Text("Usage is read from each tool's existing CLI login — no API keys are stored. Tokens are refreshed automatically; if one can't be refreshed you'll be prompted to re-authenticate.")
+                Text("Usage is read from each tool's existing CLI login — no API keys are stored. Status only opens CLI folders you choose. Tokens are refreshed automatically; if one can't be, run the shown login command yourself and choose Re-check.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -79,21 +79,28 @@ struct ProviderStatusCard: View {
                     Spacer(minLength: 0)
                 }
 
-                HStack(spacing: 8) {
-                    Spacer(minLength: 0)
-                    if state.needsAttention {
-                        Button("Re-authenticate") { Reauth.start(provider) }
-                            .buttonStyle(.borderedProminent)
-                            .tint(provider.accentColor)
+                switch state {
+                case .authorizationRequired(let resource, let lost):
+                    FolderAccessPrompt(resource: resource, lost: lost, compact: true)
+                case .notConfigured, .needsReauth:
+                    ReauthCommandPrompt(provider: provider, compact: true)
+                default:
+                    HStack {
+                        Spacer(minLength: 0)
+                        Button("Re-check") { store.reload(provider) }
                             .controlSize(.small)
                     }
-                    Button("Re-check") { store.reload(provider) }
-                        .controlSize(.small)
+                }
+
+                if let resource = provider.externalResource, access.isAuthorized(resource) {
+                    FolderGrantRow(resource: resource)
                 }
             }
             .padding(6)
         }
     }
+
+    private var access: SecurityScopedAccess { .shared }
 
     @ViewBuilder
     private var statusLine: some View {
@@ -103,12 +110,16 @@ struct ProviderStatusCard: View {
                 .font(.caption).foregroundStyle(.green)
         case .loading:
             Text("Checking \(provider.cliName)…").font(.caption).foregroundStyle(.secondary)
+        case .authorizationRequired(let resource, let lost):
+            Label(lost ? "Access needs to be granted again" : "Allow Status to access your \(resource.folderName) folder",
+                  systemImage: "folder.badge.questionmark")
+                .font(.caption).foregroundStyle(.orange)
         case .notConfigured:
             Text("Not signed in. \(provider.cliSignInHint)")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         case .needsReauth:
-            Label("Session expired — re-authenticate", systemImage: "exclamationmark.triangle.fill")
+            Label("Session expired — sign in again", systemImage: "exclamationmark.triangle.fill")
                 .font(.caption).foregroundStyle(.orange)
         case .failed(let message, _):
             Text(message).font(.caption).foregroundStyle(.secondary)
@@ -117,11 +128,57 @@ struct ProviderStatusCard: View {
     }
 }
 
+/// The folder a provider was granted, with Change… / Remove to replace or
+/// withdraw the grant.
+struct FolderGrantRow: View {
+    let resource: ExternalResource
+    @Environment(UsageStore.self) private var store
+    @State private var error: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "folder").foregroundStyle(.secondary)
+                Text(displayPath)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+                Button("Change…") {
+                    switch FolderAuthorization.choose(resource) {
+                    case .authorized: error = nil; store.reload(resource.provider)
+                    case .cancelled: break
+                    case .failed(let message): error = message
+                    }
+                }
+                Button("Remove") {
+                    SecurityScopedAccess.shared.revoke(resource)
+                    store.reload(resource.provider)
+                }
+            }
+            .controlSize(.small)
+            if let error {
+                Text(error).font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var displayPath: String {
+        guard let url = SecurityScopedAccess.shared.authorizedURL(resource) else { return resource.expectedPath }
+        let home = FileManager.default.realHomeDirectoryForCurrentUser.path
+        return url.path.hasPrefix(home + "/") ? "~" + url.path.dropFirst(home.count) : url.path
+    }
+}
+
 // MARK: - Telemetry
 
 struct TelemetrySettingsView: View {
     @Environment(TelemetryStore.self) private var telemetry
     @Environment(AppSettings.self) private var settings
+    @Environment(UsageStore.self) private var store
+    @State private var telemetryError: String?
 
     var body: some View {
         ScrollView {
@@ -138,14 +195,14 @@ struct TelemetrySettingsView: View {
 
                 Toggle("Auto-configure Claude", isOn: Binding(
                     get: { settings.telemetryAutoConfigured },
-                    set: { on in
-                        settings.telemetryAutoConfigured = on
-                        if on { OTelSetup.configure(endpoint: telemetry.endpoint) }
-                        else { OTelSetup.revert() }
-                    }
+                    set: { setAutoConfigure($0) }
                 ))
-                Text("Writes OTLP settings into ~/.claude/settings.json (safely merged). Restart Claude Code afterwards.")
+                Text("Writes OTLP settings into ~/.claude/settings.json (safely merged). Asks for your .claude folder the first time. Restart Claude Code afterwards.")
                     .font(.caption).foregroundStyle(.secondary)
+                if let telemetryError {
+                    Text(telemetryError).font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 // Antigravity doesn't export OpenTelemetry.
                 ForEach(Provider.allCases.filter { $0 != .antigravity }) { provider in
@@ -155,6 +212,31 @@ struct TelemetrySettingsView: View {
             .padding(12)
         }
         .frame(height: 460)
+    }
+
+    /// Enabling needs the `.claude` folder; ask for it if it isn't granted yet
+    /// and leave the toggle off if the user declines.
+    private func setAutoConfigure(_ on: Bool) {
+        telemetryError = nil
+        do {
+            if on {
+                if !SecurityScopedAccess.shared.isAuthorized(.claudeData) {
+                    switch FolderAuthorization.choose(.claudeData) {
+                    case .authorized: store.reload(.claude)
+                    case .cancelled: return
+                    case .failed(let message): telemetryError = message; return
+                    }
+                }
+                try OTelSetup.configure(endpoint: telemetry.endpoint)
+            } else {
+                try OTelSetup.revert()
+            }
+            settings.telemetryAutoConfigured = on
+        } catch {
+            telemetryError = error.localizedDescription
+            // A revert that can't reach the folder still stops re-applying on launch.
+            if !on { settings.telemetryAutoConfigured = false }
+        }
     }
 }
 

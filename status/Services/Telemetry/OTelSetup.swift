@@ -9,6 +9,10 @@ import Foundation
 /// ── Verify on a real Mac ──
 /// Settings/metric/exporter keys are observed from each CLI's docs and isolated
 /// here. JSON merges abort rather than clobber if a file can't be parsed.
+///
+/// Claude's settings file is only touched inside the user-granted `.claude`
+/// folder; without a grant `configure`/`revert` throw
+/// `SecurityScopedAccessError` and the UI asks for the folder.
 enum OTelSetup {
     /// Whether a provider can be configured automatically (JSON) or needs a
     /// manual snippet.
@@ -16,22 +20,21 @@ enum OTelSetup {
         provider == .claude
     }
 
-    private static var home: URL { FileManager.default.realHomeDirectoryForCurrentUser }
-
     // MARK: Apply / revert (Claude)
 
-    static func configure(endpoint: String) {
-        configureClaude(endpoint: endpoint)
+    static func configure(endpoint: String) throws {
+        try configureClaude(endpoint: endpoint)
     }
 
-    static func revert() {
-        revertClaude()
+    static func revert() throws {
+        try revertClaude()
     }
 
     static func isConfigured(_ provider: Provider, endpoint: String) -> Bool {
         switch provider {
         case .claude:
-            let env = readJSON(claudeSettings)?["env"] as? [String: Any]
+            let settings = try? withClaudeSettings { readJSON($0) }
+            let env = settings?["env"] as? [String: Any]
             return (env?["OTEL_EXPORTER_OTLP_ENDPOINT"] as? String) == endpoint
                 && env?["CLAUDE_CODE_ENABLE_TELEMETRY"] != nil
         default:
@@ -39,7 +42,15 @@ enum OTelSetup {
         }
     }
 
-    private static var claudeSettings: URL { home.appendingPathComponent(".claude/settings.json") }
+    /// Runs `operation` on `settings.json` inside the granted `.claude` folder.
+    private static func withClaudeSettings<T>(_ operation: (URL) throws -> T) throws -> T {
+        try SecurityScopedAccess.shared.withAccess(to: .claudeData) { root in
+            guard let file = SecurityScopedAccess.file("settings.json", in: root) else {
+                throw CocoaError(.fileNoSuchFile)
+            }
+            return try operation(file)
+        }
+    }
 
     private static func claudeEnv(_ endpoint: String) -> [String: String] {
         [
@@ -53,19 +64,25 @@ enum OTelSetup {
         ]
     }
 
-    private static func configureClaude(endpoint: String) {
-        var root = readJSON(claudeSettings) ?? [:]
-        var env = root["env"] as? [String: Any] ?? [:]
-        for (key, value) in claudeEnv(endpoint) { env[key] = value }
-        root["env"] = env
-        writeJSON(root, to: claudeSettings)
+    private static func configureClaude(endpoint: String) throws {
+        try withClaudeSettings { file in
+            // An existing file that doesn't parse is left alone rather than clobbered.
+            if FileManager.default.fileExists(atPath: file.path), readJSON(file) == nil { return }
+            var root = readJSON(file) ?? [:]
+            var env = root["env"] as? [String: Any] ?? [:]
+            for (key, value) in claudeEnv(endpoint) { env[key] = value }
+            root["env"] = env
+            writeJSON(root, to: file)
+        }
     }
 
-    private static func revertClaude() {
-        guard var root = readJSON(claudeSettings), var env = root["env"] as? [String: Any] else { return }
-        for key in claudeEnv("").keys { env.removeValue(forKey: key) }
-        root["env"] = env
-        writeJSON(root, to: claudeSettings)
+    private static func revertClaude() throws {
+        try withClaudeSettings { file in
+            guard var root = readJSON(file), var env = root["env"] as? [String: Any] else { return }
+            for key in claudeEnv("").keys { env.removeValue(forKey: key) }
+            root["env"] = env
+            writeJSON(root, to: file)
+        }
     }
 
     // MARK: Manual snippets (Codex + Copilot)
@@ -101,7 +118,6 @@ enum OTelSetup {
         guard JSONSerialization.isValidJSONObject(object),
               let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
         else { return }
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: url, options: .atomic)
     }
 }

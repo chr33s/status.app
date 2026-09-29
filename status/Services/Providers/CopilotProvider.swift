@@ -3,7 +3,8 @@ import os
 
 private let log = Logger(subsystem: "app.status", category: "provider.copilot")
 
-/// GitHub Copilot usage via the **Copilot CLI** login (OAuth token at
+/// GitHub Copilot usage via the **Copilot CLI** / gh login (OAuth token in the
+/// `copilot-cli` or `gh:github.com` Keychain item, or the legacy
 /// `~/.config/github-copilot/apps.json`) — no API key.
 ///
 /// Uses GitHub's internal entitlement endpoint `GET /copilot_internal/user`,

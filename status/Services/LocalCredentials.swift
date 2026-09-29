@@ -5,9 +5,13 @@ import Security
 /// so the app can show real usage without asking for any API key. When a request
 /// returns 401 the caller asks `forceRefresh` to exchange the refresh token.
 ///
-/// Reading these locations (another app's Keychain item, files under the home
-/// directory) relies on the sandbox temporary-exception entitlements in
-/// status.entitlements; the Keychain read prompts the user for access.
+/// Keychain items are read directly (the read prompts the user for access).
+/// CLI files are read only inside folders the user granted through
+/// `SecurityScopedAccess`; without a grant the lookup throws
+/// `SecurityScopedAccessError` so the UI can ask for the folder rather than
+/// report the provider as signed out. Providers with a Keychain login (Claude,
+/// Copilot) try it first and only fall back to — and only ask for — the folder
+/// when the Keychain has nothing.
 ///
 /// ── Verify on a real Mac ──
 /// The OAuth client ids / token endpoints / stored JSON shapes below are
@@ -32,7 +36,33 @@ enum LocalCredentials {
     private static let googleTokenURL = URL(string: "https://oauth2.googleapis.com/token")!
     private static let grokTokenURL = URL(string: "https://auth.x.ai/oauth2/token")!
 
-    private static var home: URL { FileManager.default.realHomeDirectoryForCurrentUser }
+    /// Owner of the user's folder grants. Replaced only by tests.
+    static var access = SecurityScopedAccess.shared
+
+    /// A generic-password Keychain item: its secret and the account it's filed
+    /// under (the CLIs store the GitHub login there).
+    struct KeychainItem: Equatable {
+        var data: Data
+        var account: String?
+    }
+
+    /// Reads one generic-password item by service (and optionally account).
+    /// Replaced by tests so they never touch — or prompt for — the real Keychain.
+    static var readKeychainItem: (_ service: String, _ account: String?) -> KeychainItem? = { service, account in
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecReturnData as String: true,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        if let account { query[kSecAttrAccount as String] = account }
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let attributes = item as? [String: Any],
+              let data = attributes[kSecValueData as String] as? Data else { return nil }
+        return KeychainItem(data: data, account: attributes[kSecAttrAccount as String] as? String)
+    }
 
     // MARK: Public API
 
@@ -41,8 +71,11 @@ enum LocalCredentials {
     ///
     /// `async` (and not actor-isolated) so the Keychain/file reads run off the
     /// main thread when called from the `@MainActor` store.
-    static func credential(for provider: Provider) async -> Credential? {
-        guard let loaded = load(provider) else { return nil }
+    ///
+    /// Returns nil when the CLI has no login; throws `SecurityScopedAccessError`
+    /// when Status can't look because the folder isn't (or is no longer) granted.
+    static func credential(for provider: Provider) async throws -> Credential? {
+        guard let loaded = try load(provider) else { return nil }
         if let key = loaded.apiKey { return .apiKey(key) }
         return .oauth(accessToken: loaded.access, accountID: loaded.accountID, displayName: loaded.displayName)
     }
@@ -56,6 +89,8 @@ enum LocalCredentials {
             case .antigravity:
                 cachedAntigravityKeychain = nil
                 refreshedAntigravity = nil
+            case .copilot:
+                cachedCopilotKeychain = nil
             default:
                 break
             }
@@ -85,7 +120,7 @@ enum LocalCredentials {
         case .codex, .grok:
             // File reads are free (no permission dialog), so always look for a
             // CLI-rotated token before spending our own refresh exchange.
-            if let loaded = load(provider), loaded.apiKey == nil, !loaded.access.isEmpty,
+            if let loaded = try? load(provider), loaded.apiKey == nil, !loaded.access.isEmpty,
                loaded.access != failedAccess {
                 return .oauth(accessToken: loaded.access, accountID: loaded.accountID, displayName: loaded.displayName)
             }
@@ -105,8 +140,13 @@ enum LocalCredentials {
             guard hadCache else { return nil }
             return await refreshFromStore(provider)
         case .copilot:
-            // No refresh token; a 401 means the gh login itself is stale.
-            return nil
+            // No refresh token to exchange, but `copilot login` / `gh auth
+            // login` rotate the Keychain item in place — re-read it and only
+            // retry if the stored token differs from the one that just 401'd.
+            keychainLock.withLock { cachedCopilotKeychain = nil }
+            guard let loaded = try? loadCopilot(), !loaded.access.isEmpty,
+                  loaded.access != failedAccess else { return nil }
+            return .oauth(accessToken: loaded.access, accountID: loaded.accountID, displayName: loaded.displayName)
         }
     }
 
@@ -124,19 +164,19 @@ enum LocalCredentials {
             return cachedClaudeKeychain.flatMap { parseClaude($0, source: .claudeKeychain)?.access }
         }
         let stale = failedAccess ?? cachedAccess
-        guard let loaded = loadClaude(), !loaded.access.isEmpty, loaded.access != stale else { return nil }
+        guard let loaded = try? loadClaude(), !loaded.access.isEmpty, loaded.access != stale else { return nil }
         return .oauth(accessToken: loaded.access, accountID: loaded.accountID, displayName: loaded.displayName)
     }
 
     private static func refreshFromStore(_ provider: Provider) async -> Credential? {
-        guard let loaded = load(provider), loaded.refresh != nil,
+        guard let loaded = try? load(provider), loaded.refresh != nil,
               let refreshed = try? await refresh(loaded) else { return nil }
         return .oauth(accessToken: refreshed.access, accountID: refreshed.accountID, displayName: refreshed.displayName)
     }
 
     // MARK: Loaded credential
 
-    private enum Source { case claudeKeychain, claudeFile, codexFile, antigravityKeychain, copilotConfig, grokFile }
+    private enum Source { case claudeKeychain, claudeFile, codexFile, antigravityKeychain, copilotKeychain, copilotConfig, grokFile }
 
     private struct Loaded {
         var access: String
@@ -151,24 +191,26 @@ enum LocalCredentials {
         var raw: [String: Any]
     }
 
-    private static func load(_ provider: Provider) -> Loaded? {
+    private static func load(_ provider: Provider) throws -> Loaded? {
         switch provider {
-        case .claude: return loadClaude()
-        case .codex: return loadCodex()
+        case .claude: return try loadClaude()
+        case .codex: return try loadCodex()
         case .antigravity: return loadAntigravity()
-        case .copilot: return loadCopilot()
-        case .grok: return loadGrok()
+        case .copilot: return try loadCopilot()
+        case .grok: return try loadGrok()
         }
     }
 
     // MARK: Claude Code
 
-    private static func loadClaude() -> Loaded? {
+    /// The Keychain item is the usual store; the `.claude` folder is only
+    /// needed (and only requested) when it's missing.
+    private static func loadClaude() throws -> Loaded? {
         if let raw = claudeKeychainJSON(), let loaded = parseClaude(raw, source: .claudeKeychain) {
             return loaded
         }
-        let file = home.appendingPathComponent(".claude/.credentials.json")
-        if let raw = readJSONObject(file), let loaded = parseClaude(raw, source: .claudeFile) {
+        if let raw = try readJSONObject(".credentials.json", in: .claudeData),
+           let loaded = parseClaude(raw, source: .claudeFile) {
             return loaded
         }
         return nil
@@ -195,6 +237,7 @@ enum LocalCredentials {
     private static let keychainLock = NSLock()
     private static var cachedClaudeKeychain: [String: Any]?
     private static var cachedAntigravityKeychain: [String: Any]?
+    private static var cachedCopilotKeychain: (token: String, login: String?)?
 
     private static func claudeKeychainJSON() -> [String: Any]? {
         keychainLock.lock()
@@ -207,23 +250,28 @@ enum LocalCredentials {
     }
 
     private static func keychainData(service: String, account: String? = nil) -> Data? {
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        if let account { query[kSecAttrAccount as String] = account }
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else { return nil }
-        return item as? Data
+        readKeychainItem(service, account)?.data
+    }
+
+    /// The item's secret as text. Go's `keyring` package (used by gh and
+    /// Antigravity) wraps values it can't store verbatim as
+    /// `go-keyring-base64:<base64>`; that wrapper is unwrapped here.
+    private static func keychainString(_ data: Data) -> String? {
+        guard var text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        else { return nil }
+        let prefix = "go-keyring-base64:"
+        if text.hasPrefix(prefix) {
+            guard let decoded = Data(base64Encoded: String(text.dropFirst(prefix.count))),
+                  let string = String(data: decoded, encoding: .utf8) else { return nil }
+            text = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return text
     }
 
     // MARK: Codex CLI
 
-    private static func loadCodex() -> Loaded? {
-        let file = home.appendingPathComponent(".codex/auth.json")
-        guard let raw = readJSONObject(file) else { return nil }
+    private static func loadCodex() throws -> Loaded? {
+        guard let raw = try readJSONObject("auth.json", in: .codexData) else { return nil }
         let root = JSON(raw)
         if let access = root["tokens"]["access_token"].string, !access.isEmpty {
             // Codex needs the opaque `account_id` UUID at request time (sent
@@ -277,14 +325,7 @@ enum LocalCredentials {
         defer { keychainLock.unlock() }
         if let cached = cachedAntigravityKeychain { return cached }
         guard let data = keychainData(service: "gemini", account: "antigravity"),
-              var text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        else { return nil }
-        let prefix = "go-keyring-base64:"
-        if text.hasPrefix(prefix) {
-            guard let decoded = Data(base64Encoded: String(text.dropFirst(prefix.count))),
-                  let string = String(data: decoded, encoding: .utf8) else { return nil }
-            text = string
-        }
+              let text = keychainString(data) else { return nil }
         let json = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]
         cachedAntigravityKeychain = json
         return json
@@ -309,10 +350,18 @@ enum LocalCredentials {
     /// xAI's Grok CLI stores an OIDC login in `~/.grok/auth.json` keyed by
     /// `<issuer>::<client_id>`. Each entry carries the access JWT (`key`), a
     /// refresh token, and the signed-in email/team. We also accept a plain
-    /// `XAI_API_KEY` / `GROK_API_KEY` env var so non-CLI users can sign in.
-    private static func loadGrok() -> Loaded? {
-        let file = home.appendingPathComponent(".grok/auth.json")
-        if let raw = readJSONObject(file), let (_, entry) = grokOIDCEntry(in: raw) {
+    /// `XAI_API_KEY` / `GROK_API_KEY` env var so non-CLI users can sign in;
+    /// only without one does a missing folder grant surface as an error.
+    private static func loadGrok() throws -> Loaded? {
+        var accessError: Error?
+        let raw: [String: Any]?
+        do {
+            raw = try readJSONObject("auth.json", in: .grokData)
+        } catch {
+            raw = nil
+            accessError = error
+        }
+        if let raw, let (_, entry) = grokOIDCEntry(in: raw) {
             let json = JSON(entry)
             if let access = json["key"].string, !access.isEmpty {
                 return Loaded(
@@ -331,6 +380,7 @@ enum LocalCredentials {
                               source: .grokFile, apiKey: value, raw: [:])
             }
         }
+        if let accessError { throw accessError }
         return nil
     }
 
@@ -345,11 +395,22 @@ enum LocalCredentials {
 
     // MARK: GitHub CLI / Copilot
 
-    private static func loadCopilot() -> Loaded? {
-        // Prefer the Copilot plugin config (JSON), then the gh CLI hosts file.
-        for name in ["github-copilot/apps.json", "github-copilot/hosts.json"] {
-            let file = configHome.appendingPathComponent(name)
-            if let raw = readJSONObject(file) {
+    /// The Keychain is the usual store, so no folder grant is needed: the
+    /// Copilot CLI (`copilot login`) files a bare GitHub token under service
+    /// `copilot-cli`, account `https://github.com:<login>`; the gh CLI
+    /// (`gh auth login`) under service `gh:github.com`, account `<login>`,
+    /// go-keyring-wrapped. Only when neither exists is the granted folder
+    /// read — `~/.config/github-copilot` (the Copilot plugin's JSON config) or
+    /// `~/.config/gh` (`hosts.yml`, which only carries the token for logins
+    /// made with `--insecure-storage`) — never all of `~/.config`.
+    private static func loadCopilot() throws -> Loaded? {
+        if let (token, login) = copilotKeychainToken() {
+            return Loaded(access: token, refresh: nil,
+                          accountID: login, displayName: login,
+                          source: .copilotKeychain, apiKey: nil, raw: [:])
+        }
+        for name in ["apps.json", "hosts.json"] {
+            if let raw = try readJSONObject(name, in: .githubConfig) {
                 for (key, value) in raw where key.contains("github.com") {
                     let entry = JSON(value)
                     if let token = entry["oauth_token"].string, !token.isEmpty {
@@ -361,7 +422,7 @@ enum LocalCredentials {
                 }
             }
         }
-        if let (token, user) = ghHostsToken() {
+        if let (token, user) = try ghHostsToken() {
             return Loaded(access: token, refresh: nil,
                           accountID: user, displayName: user,
                           source: .copilotConfig, apiKey: nil, raw: [:])
@@ -369,10 +430,34 @@ enum LocalCredentials {
         return nil
     }
 
+    /// First GitHub token found in the Keychain (Copilot CLI, then gh), with
+    /// the login it was filed under. Cached like the other Keychain reads so a
+    /// sync doesn't re-prompt; `resetCache` / `forceRefresh` drop the cache.
+    private static func copilotKeychainToken() -> (token: String, login: String?)? {
+        keychainLock.lock()
+        defer { keychainLock.unlock() }
+        if let cached = cachedCopilotKeychain { return cached }
+        let services = [
+            ("copilot-cli", { (account: String?) -> String? in
+                // `https://github.com:<login>` → `<login>`.
+                account.flatMap { $0.split(separator: ":").last.map(String.init) }
+            }),
+            ("gh:github.com", { (account: String?) -> String? in account }),
+        ]
+        for (service, login) in services {
+            guard let item = readKeychainItem(service, nil),
+                  let token = keychainString(item.data), !token.isEmpty else { continue }
+            let found = (token: token, login: login(item.account).flatMap { $0.isEmpty ? nil : $0 })
+            cachedCopilotKeychain = found
+            return found
+        }
+        return nil
+    }
+
     /// Minimal parse of `~/.config/gh/hosts.yml` for github.com's oauth_token/user.
-    private static func ghHostsToken() -> (String, String?)? {
-        let file = configHome.appendingPathComponent("gh/hosts.yml")
-        guard let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+    private static func ghHostsToken() throws -> (String, String?)? {
+        guard let data = try readData("hosts.yml", in: .githubConfig),
+              let text = String(data: data, encoding: .utf8) else { return nil }
         var inGitHub = false
         var token: String?
         var user: String?
@@ -394,13 +479,6 @@ enum LocalCredentials {
         return (token, user)
     }
 
-    private static var configHome: URL {
-        if let xdg = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"], !xdg.isEmpty {
-            return URL(fileURLWithPath: xdg)
-        }
-        return home.appendingPathComponent(".config")
-    }
-
     // MARK: Refresh
 
     private static func refresh(_ loaded: Loaded) async throws -> Loaded {
@@ -408,9 +486,11 @@ enum LocalCredentials {
         // Exchanging may rotate (and invalidate) the refresh token, so never
         // start one we can't write back — that would strand the CLI with a
         // dead token and log it out.
-        if let file = authFile(loaded.source),
-           !FileManager.default.isWritableFile(atPath: file.path) {
-            throw CocoaError(.fileWriteNoPermission)
+        if let (resource, name) = authFile(loaded.source) {
+            let writable = try access.withAccess(to: resource) { root in
+                SecurityScopedAccess.file(name, in: root).map { FileManager.default.isWritableFile(atPath: $0.path) } ?? false
+            }
+            guard writable else { throw CocoaError(.fileWriteNoPermission) }
         }
         switch loaded.source {
         case .claudeKeychain, .claudeFile:
@@ -422,7 +502,7 @@ enum LocalCredentials {
             return try await refreshAntigravity(loaded, refreshToken: refreshToken)
         case .grokFile:
             return try await refreshGrok(loaded, refreshToken: refreshToken)
-        case .copilotConfig:
+        case .copilotKeychain, .copilotConfig:
             return loaded
         }
     }
@@ -505,46 +585,39 @@ enum LocalCredentials {
     /// Returns whether the rotated tokens actually reached the CLI's store.
     @discardableResult
     private static func persist(_ raw: [String: Any], to source: Source) -> Bool {
-        guard let file = authFile(source),
+        guard let (resource, name) = authFile(source),
               let data = try? JSONSerialization.data(withJSONObject: raw, options: .prettyPrinted)
         else { return false }
-        do {
+        return (try? access.withAccess(to: resource) { root -> Bool in
+            guard let file = SecurityScopedAccess.file(name, in: root) else { return false }
             try data.write(to: file, options: .atomic)
             return true
-        } catch {
-            return false
-        }
+        }) ?? false
     }
 
     /// The CLI auth file a refreshed token is written back to; nil for sources
     /// that are never written (Claude, Antigravity, Copilot).
-    private static func authFile(_ source: Source) -> URL? {
+    private static func authFile(_ source: Source) -> (ExternalResource, String)? {
         switch source {
-        case .codexFile: return home.appendingPathComponent(".codex/auth.json")
-        case .grokFile: return home.appendingPathComponent(".grok/auth.json")
-        case .claudeKeychain, .claudeFile, .antigravityKeychain, .copilotConfig: return nil
+        case .codexFile: return (.codexData, "auth.json")
+        case .grokFile: return (.grokData, "auth.json")
+        case .claudeKeychain, .claudeFile, .antigravityKeychain, .copilotKeychain, .copilotConfig: return nil
         }
     }
 
     // MARK: Helpers
 
-    private static func readJSONObject(_ url: URL) -> [String: Any]? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-    }
-}
-
-extension FileManager {
-    /// The user's real home directory. In a sandboxed app,
-    /// `homeDirectoryForCurrentUser` points at the app *container*
-    /// (~/Library/Containers/…/Data), but the CLI credential and config files
-    /// live in the real home — which the temporary-exception entitlements
-    /// grant access to.
-    var realHomeDirectoryForCurrentUser: URL {
-        if let dir = getpwuid(getuid())?.pointee.pw_dir {
-            return URL(fileURLWithPath: String(cString: dir), isDirectory: true)
+    /// Reads `name` inside the granted folder. Nil when the file is missing or
+    /// unreadable; throws only when the folder itself isn't accessible.
+    private static func readData(_ name: String, in resource: ExternalResource) throws -> Data? {
+        try access.withAccess(to: resource) { root in
+            SecurityScopedAccess.file(name, in: root).flatMap { try? Data(contentsOf: $0) }
         }
-        return homeDirectoryForCurrentUser
+    }
+
+    private static func readJSONObject(_ name: String, in resource: ExternalResource) throws -> [String: Any]? {
+        guard let data = try readData(name, in: resource) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
 }
 

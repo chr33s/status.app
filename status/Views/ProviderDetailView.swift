@@ -8,21 +8,19 @@ struct ProviderDetailView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             switch state {
+            case .authorizationRequired(let resource, let lost):
+                header(plan: nil, subtitle: lost ? "Access needs to be granted again" : "Access required")
+                FolderAccessPrompt(resource: resource, lost: lost)
             case .notConfigured:
                 reauthPrompt(
                     subtitle: "Not signed in",
-                    message: "No \(provider.cliName) login found. \(provider.cliSignInHint)",
-                    buttonTitle: "Sign in with \(provider.cliName)"
+                    message: "No \(provider.cliName) login found. \(provider.cliSignInHint)"
                 )
             case .loading:
                 header(plan: nil, subtitle: "Updating…")
                 ProgressView().controlSize(.small)
             case .needsReauth(let message, let stale):
-                reauthPrompt(
-                    subtitle: "Session expired",
-                    message: message,
-                    buttonTitle: "Re-authenticate"
-                )
+                reauthPrompt(subtitle: "Session expired", message: message)
                 if let stale {
                     staleUsage(stale)
                 }
@@ -47,20 +45,14 @@ struct ProviderDetailView: View {
 
     // MARK: States
 
-    private func reauthPrompt(subtitle: String, message: String, buttonTitle: String) -> some View {
+    private func reauthPrompt(subtitle: String, message: String) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             header(plan: nil, subtitle: subtitle)
             Text(message)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Button {
-                Reauth.start(provider)
-            } label: {
-                Label(buttonTitle, systemImage: "person.badge.key")
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(provider.accentColor)
+            ReauthCommandPrompt(provider: provider)
         }
     }
 

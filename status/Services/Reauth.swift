@@ -1,32 +1,47 @@
 import AppKit
 
-/// Launches a provider's CLI login flow so the user can re-authenticate when a
-/// token is expired/invalid.
+/// Helps the user re-authenticate a provider's CLI themselves.
 ///
-/// CLIs have no real URL scheme, so this tells Terminal to run the login
-/// command via Apple Events. A staged `.command` script can't be used now that
-/// the app is sandboxed: the sandbox quarantines every file the app writes,
-/// and Gatekeeper refuses to run quarantined unsigned scripts ("damaged").
-/// Automating Terminal instead requires the `temporary-exception.apple-events`
-/// entitlement plus `NSAppleEventsUsageDescription`, and macOS asks the user
-/// for consent on first use.
+/// Status never runs the login command: it copies it (exactly, with no
+/// trailing newline) and can launch Terminal via `NSWorkspace` for
+/// convenience. The user pastes and runs it, then chooses Re-check — a
+/// launched Terminal is never taken as proof of sign-in.
 enum Reauth {
-    static func start(_ provider: Provider) {
-        let command = "clear; echo 'Re-authenticating \(provider.fullName)…'; echo; \(provider.reauthCommand)"
-        let escaped = command
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        let source = """
-        tell application "Terminal"
-            activate
-            do script "\(escaped)"
-        end tell
-        """
-        var error: NSDictionary?
-        if NSAppleScript(source: source)?.executeAndReturnError(&error) == nil {
-            // Automation denied or Terminal unavailable — fall back to the
-            // provider's dashboard in the browser.
-            _ = NSWorkspace.shared.open(provider.dashboardURL)
+    @MainActor
+    @discardableResult
+    static func copyCommand(for provider: Provider, to pasteboard: NSPasteboard = .general) -> Bool {
+        pasteboard.clearContents()
+        return pasteboard.setString(provider.reauthCommand, forType: .string)
+    }
+
+    @MainActor
+    static func copyAndOpenTerminal(
+        for provider: Provider,
+        onFailure: @escaping @MainActor (String) -> Void
+    ) {
+        guard copyCommand(for: provider) else {
+            onFailure("The login command could not be copied.")
+            return
+        }
+
+        let workspace = NSWorkspace.shared
+        guard let terminalURL = workspace.urlForApplication(
+            withBundleIdentifier: "com.apple.Terminal"
+        ) else {
+            onFailure("Terminal could not be found. Open your terminal manually and paste the copied command.")
+            return
+        }
+
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+
+        workspace.openApplication(
+            at: terminalURL,
+            configuration: configuration
+        ) { _, error in
+            guard let error else { return }
+            let message = error.localizedDescription
+            Task { @MainActor in onFailure(message) }
         }
     }
 }

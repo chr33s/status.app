@@ -21,16 +21,17 @@ Mac except requests to each provider's own API.
   Copilot premium requests & month-to-date spend).
 - **Automatic token refresh** — expired OAuth tokens are refreshed via the CLI's
   client and written back so the CLI stays in sync.
-- **Re-authenticate prompt** — when a token is expired/invalid and can't be
-  refreshed (or you're not signed in), the app shows a button that launches the
-  CLI's login flow in Terminal.
+- **Sign-in prompt** — when a token is expired/invalid and can't be refreshed
+  (or you're not signed in), the app shows the CLI's login command with **Copy**
+  and **Copy & Open Terminal**. You paste and run it yourself, then choose
+  **Re-check**.
 - Quick actions: Refresh, Usage Dashboard, Status Page, Settings, Quit.
 - Configurable auto-refresh interval, optional menu-bar usage badge, and
   launch-at-login (via `SMAppService`).
-- Hardened Runtime enabled. **App Sandbox is disabled** — reading the CLIs'
-  logins (a Keychain item and files under `~/.codex`, `~/.claude`,
-  `~/.config`) isn't possible from within the sandbox, so the app ships
-  non-sandboxed (not App Store distributable), like the CLIs it reads.
+- Hardened Runtime and **App Sandbox enabled**, with no temporary sandbox
+  exceptions. The app only reads a CLI's folder (`~/.claude`, `~/.codex`,
+  `~/.grok`, `~/.config/gh`) after you choose it in a folder picker, and
+  remembers that grant with a security-scoped bookmark.
 
 ## Requirements
 
@@ -53,14 +54,21 @@ xcodebuild -project status.xcodeproj -scheme status -configuration Release build
 
 ## How it gets usage
 
-Sign into each CLI once and the app picks it up automatically:
+Sign into each CLI once. The first time a provider needs its CLI's folder, its
+tab shows **Access required** with a **Choose … Folder** button; pick the folder
+(hidden dot-folders are shown in the picker) and the app reads the login from
+there. The grant is remembered across launches — change or remove it under
+**Settings → Providers**. If the folder is moved or deleted, the tab shows
+**Access needs to be granted again**. Access required is never reported as
+“Not signed in”. Antigravity (Keychain only) needs no folder, and neither do
+Claude or Copilot when their login is in the Keychain.
 
 | Provider | CLI | Credential read | Usage source |
 |----------|-----|-----------------|--------------|
 | Claude | Claude Code (`claude`) | `Claude Code-credentials` Keychain item, or `~/.claude/.credentials.json` | OAuth probe → `anthropic-ratelimit-unified-*` headers → Session (5h) / Weekly (7d) |
 | Codex | Codex CLI (`codex login`) | `~/.codex/auth.json` | ChatGPT OAuth → streamed `rate_limits.primary` / `.secondary` |
 | Antigravity | Antigravity app / `agy` | `gemini` / `antigravity` Keychain item (read-only; refreshed tokens kept in memory) | Cloud Code `v1internal:retrieveUserQuotaSummary` → Gemini + Claude pools, Session (5h) / Weekly; falls back to `retrieveUserQuota` |
-| Copilot | GitHub CLI (`gh auth login`) | `~/.config/github-copilot/apps.json` or `~/.config/gh/hosts.yml` | `GET /users/{login}/settings/billing/usage` |
+| Copilot | Copilot CLI (`copilot login`) or GitHub CLI (`gh auth login`) | `copilot-cli` or `gh:github.com` Keychain item; else `apps.json` / `hosts.json` in a granted `~/.config/github-copilot`, or `hosts.yml` in a granted `~/.config/gh` | `GET /users/{login}/settings/billing/usage` |
 
 If a CLI is configured with a plain API key instead of an OAuth login
 (`OPENAI_API_KEY` in `auth.json`, `XAI_API_KEY` for Grok), the
@@ -76,7 +84,8 @@ credential handling). Claude, Codex, and Copilot export OTLP over HTTP as `appli
 Open **Settings → Telemetry**:
 
 - **Claude** is configured automatically (a safe JSON merge into
-  `~/.claude/settings.json`) when you toggle *Automatically configure*.
+  `~/.claude/settings.json`) when you toggle *Auto-configure Claude*; the
+  first time, the app asks you to choose your `.claude` folder.
 - **Antigravity** doesn't export OpenTelemetry, so it has no live usage.
 - **Codex** (`~/.codex/config.toml` `[otel]`) and **Copilot** (shell `OTEL_*`
   env) show a copy-paste snippet, since we don't rewrite TOML or your shell rc.
@@ -97,9 +106,13 @@ usage; the probes give the subscription Session/Weekly/quota windows on demand.
   a request returns 401 — the app refreshes it via the CLI's OAuth client and
   **writes the rotated token back** to the same store.
 - If the refresh fails (no/invalid refresh token), the provider switches to a
-  **“session expired — re-authenticate”** state with a button that opens Terminal
-  running the CLI's login command (`claude`, `codex login`, `agy`,
-  `gh auth login --web`). The same button appears when you're not signed in.
+  **“Session expired”** state showing the CLI's login command (`claude auth
+  login`, `codex login --device-auth`, `agy`, `copilot login`, `grok login`).
+  **Copy & Open Terminal** copies it (no trailing newline) and launches Terminal
+  via `NSWorkspace`; **Copy** is for other terminal apps. The app never types,
+  pastes, or runs anything in Terminal and doesn't send it Apple Events — you
+  run the command, then choose **Re-check**. The same prompt appears when
+  you're not signed in.
 
 ### Caveats — please verify on your Mac
 
@@ -131,11 +144,55 @@ status/
 ├─ StatusApp.swift          # @main, MenuBarExtra + Settings scenes
 ├─ Models/                     # Provider, Usage, LoadState
 ├─ Services/
-│  ├─ LocalCredentials.swift   # reads/refreshes the four CLIs' logins
-│  ├─ Reauth.swift             # launches a CLI login in Terminal
+│  ├─ LocalCredentials.swift   # reads/refreshes the CLIs' logins
+│  ├─ SecurityScopedAccess.swift # user-granted CLI folders (bookmarks)
+│  ├─ Reauth.swift             # copies a CLI login command, opens Terminal
 │  ├─ HTTPClient.swift         # async requests + JSON/header navigation
 │  ├─ AppSettings.swift        # non-secret prefs (UserDefaults)
 │  ├─ UsageStore.swift         # state, credential resolution, scheduling
 │  └─ Providers/               # one fetcher per service + SessionUsage helper
 └─ Views/                      # MenuBarExtra UI + Settings
 ```
+
+## App Review notes
+
+> Status is sandboxed. It does not automate or send Apple Events to Terminal.
+> When CLI authentication is required, Status displays and copies the login
+> command and can launch Terminal using NSWorkspace; the user manually pastes
+> and executes the command.
+>
+> Status accesses existing CLI configuration only after the user explicitly
+> selects the corresponding CLI data folder. Access is persisted using macOS
+> security-scoped bookmarks. The app no longer requests temporary
+> home-relative filesystem exceptions.
+
+Reviewer steps — folder authorization:
+
+1. Install the Codex CLI and run `codex login` (creates `~/.codex/auth.json`).
+2. Launch Status and open its menu-bar item; select the **Codex** tab. It shows
+   **Access required** (not “Not signed in”).
+3. Click **Choose .codex Folder**; the picker opens at `~/.codex`. Click
+   **Allow Access**. Usage loads.
+4. Quit and relaunch Status: usage loads without another picker.
+5. **Settings → Providers → Codex → Remove** returns the tab to Access required.
+
+Reviewer steps — manual reauthentication:
+
+1. With a granted but signed-out folder (e.g. run `codex logout`), the Codex tab
+   shows **Not signed in** with the command `codex login --device-auth`.
+2. Click **Copy & Open Terminal**: the command is on the clipboard and Terminal
+   opens; nothing is typed or run.
+3. Paste and run the command in Terminal, complete sign-in, then click
+   **Re-check** in Status. Usage loads.
+
+Release entitlement check (signed archive):
+
+```sh
+codesign -d --entitlements - --xml Status.app | plutil -p -
+```
+
+Expect `com.apple.security.app-sandbox`,
+`com.apple.security.files.user-selected.read-write`, and
+`com.apple.security.files.bookmarks.app-scope` (needed to persist the folder
+grants as app-scoped bookmarks) set to true, and no
+`com.apple.security.temporary-exception.*` keys.

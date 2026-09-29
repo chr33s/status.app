@@ -29,7 +29,8 @@ struct MenuBarLabel: View {
             telemetry.start()
             if settings.telemetryAutoConfigured {
                 let endpoint = telemetry.endpoint
-                Task.detached { OTelSetup.configure(endpoint: endpoint) }
+                // Silently skipped if the .claude folder grant is missing.
+                Task.detached { try? OTelSetup.configure(endpoint: endpoint) }
             }
         }
     }

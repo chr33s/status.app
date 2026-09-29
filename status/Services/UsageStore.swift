@@ -86,7 +86,18 @@ final class UsageStore {
         // Kept so a fetch that ends in needsReauth can still show the last
         // good usage (marked stale) instead of dropping to an empty prompt.
         let lastSnapshot = states[provider]?.snapshot
-        guard let credential = await LocalCredentials.credential(for: provider) else {
+        let found: Credential?
+        do {
+            found = try await LocalCredentials.credential(for: provider)
+        } catch let error as SecurityScopedAccessError {
+            // No permission to look isn't the same as not signed in.
+            states[provider] = .authorizationRequired(error.resource, lost: error == .accessLost(error.resource))
+            return
+        } catch {
+            states[provider] = .failed(error.localizedDescription, stale: lastSnapshot)
+            return
+        }
+        guard let credential = found else {
             states[provider] = .notConfigured
             return
         }
@@ -121,9 +132,9 @@ final class UsageStore {
         if provider == .claude {
             // We never refresh Claude's single-use token ourselves; any CLI
             // session rotates it and the next refresh picks it up.
-            return "Claude Code's session token has expired. Using \(provider.cliName) refreshes it automatically — or re-authenticate now."
+            return "Claude Code's session token has expired. Using \(provider.cliName) refreshes it automatically — or sign in again using your CLI."
         }
-        return "Your \(provider.cliName) session has expired or is invalid. Re-authenticate to continue."
+        return "Your \(provider.cliName) session has expired or is invalid. Sign in again using your CLI."
     }
 
     /// Called by the settings UI / re-check actions.
