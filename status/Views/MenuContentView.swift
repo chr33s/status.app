@@ -5,6 +5,12 @@ struct MenuContentView: View {
     @Environment(UsageStore.self) private var store
     @Environment(\.openURL) private var openURL
     @State private var showingSettings = false
+    /// Measured height of the detail content, so the scroll area hugs it
+    /// instead of leaving empty space above the action menu.
+    @State private var detailHeight: CGFloat = 0
+
+    /// Tallest the detail area grows before it scrolls.
+    private static let maxDetailHeight: CGFloat = 360
 
     var body: some View {
         Group {
@@ -28,8 +34,9 @@ struct MenuContentView: View {
                     provider: store.selected,
                     state: store.state(for: store.selected)
                 )
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { detailHeight = $0 }
             }
-            .frame(height: 360)
+            .frame(height: min(detailHeight, Self.maxDetailHeight))
 
             Divider()
             actionMenu
