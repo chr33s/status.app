@@ -10,8 +10,9 @@ import Security
 /// `SecurityScopedAccess`; without a grant the lookup throws
 /// `SecurityScopedAccessError` so the UI can ask for the folder rather than
 /// report the provider as signed out. Providers with a Keychain login (Claude,
-/// Copilot) try it first and only fall back to — and only ask for — the folder
-/// when the Keychain has nothing.
+/// Copilot, Codex in `cli_auth_credentials_store = "keyring"` mode) try it
+/// first and only fall back to — and only ask for — the folder when the
+/// Keychain has nothing.
 ///
 /// ── Verify on a real Mac ──
 /// The OAuth client ids / token endpoints / stored JSON shapes below are
@@ -25,6 +26,8 @@ import Security
 /// via SecItemUpdate resets the Keychain item's access grants — every
 /// `security`-tool read the CLI makes starts prompting again. We never refresh
 /// or write Claude's credentials; on 401 we just re-read what the CLI stored.
+/// A Codex login stored in the Keychain gets the same treatment, for the same
+/// reasons (Codex rotates its refresh token too).
 enum LocalCredentials {
     // Observed public OAuth clients for the CLIs.
     private static let codexClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
@@ -86,6 +89,8 @@ enum LocalCredentials {
             switch provider {
             case .claude:
                 cachedClaudeKeychain = nil
+            case .codex:
+                cachedCodexKeychain = nil
             case .antigravity:
                 cachedAntigravityKeychain = nil
                 refreshedAntigravity = nil
@@ -106,9 +111,10 @@ enum LocalCredentials {
     /// access token.
     ///
     /// Claude is never refreshed here — its refresh token is single-use and
-    /// owned by the CLI (see the type doc). Codex and Grok re-read their auth
-    /// file first for the same reason: the CLI may have already rotated the
+    /// owned by the CLI (see the type doc). Codex and Grok re-read their store
+    /// first for the same reason: the CLI may have already rotated the
     /// token, and exchanging a refresh token it still holds would race it.
+    /// A Codex login held in the Keychain is, like Claude's, only ever re-read.
     ///
     /// `failed` is the credential that just 401'd, so a re-read can tell a
     /// rotated token apart from the same stale one.
@@ -118,12 +124,17 @@ enum LocalCredentials {
         case .claude:
             return rereadClaude(failedAccess: failedAccess)
         case .codex, .grok:
-            // File reads are free (no permission dialog), so always look for a
-            // CLI-rotated token before spending our own refresh exchange.
-            if let loaded = try? load(provider), loaded.apiKey == nil, !loaded.access.isEmpty,
-               loaded.access != failedAccess {
+            // Re-read the store (dropping any cached Keychain copy) and look
+            // for a CLI-rotated token before spending our own refresh exchange.
+            if provider == .codex { keychainLock.withLock { cachedCodexKeychain = nil } }
+            let loaded = try? load(provider)
+            if let loaded, loaded.apiKey == nil, !loaded.access.isEmpty, loaded.access != failedAccess {
                 return .oauth(accessToken: loaded.access, accountID: loaded.accountID, displayName: loaded.displayName)
             }
+            // Never exchange a Keychain-stored Codex refresh token: it's
+            // single-use and we can't write the rotation back into the CLI's
+            // item without disturbing its access grants.
+            if loaded?.source == .codexKeychain { return nil }
             return await refreshFromStore(provider)
         case .antigravity:
             // Google refresh tokens are reusable, so exchanging is safe; try
@@ -170,13 +181,17 @@ enum LocalCredentials {
 
     private static func refreshFromStore(_ provider: Provider) async -> Credential? {
         guard let loaded = try? load(provider), loaded.refresh != nil,
-              let refreshed = try? await refresh(loaded) else { return nil }
+              let refreshed = try? await refresh(loaded),
+              // An exchange that produced no new token isn't worth retrying.
+              refreshed.access != loaded.access else { return nil }
         return .oauth(accessToken: refreshed.access, accountID: refreshed.accountID, displayName: refreshed.displayName)
     }
 
     // MARK: Loaded credential
 
-    private enum Source { case claudeKeychain, claudeFile, codexFile, antigravityKeychain, copilotKeychain, copilotConfig, grokFile }
+    private enum Source {
+        case claudeKeychain, claudeFile, codexKeychain, codexFile, antigravityKeychain, copilotKeychain, copilotConfig, grokFile
+    }
 
     private struct Loaded {
         var access: String
@@ -236,6 +251,7 @@ enum LocalCredentials {
     /// so reads are kept to launch and refresh-token failure.
     private static let keychainLock = NSLock()
     private static var cachedClaudeKeychain: [String: Any]?
+    private static var cachedCodexKeychain: [String: Any]?
     private static var cachedAntigravityKeychain: [String: Any]?
     private static var cachedCopilotKeychain: (token: String, login: String?)?
 
@@ -270,8 +286,32 @@ enum LocalCredentials {
 
     // MARK: Codex CLI
 
+    /// Codex keeps the same auth JSON either in `~/.codex/auth.json` or — with
+    /// `cli_auth_credentials_store = "keyring"` — in a Keychain item (service
+    /// `Codex Auth`, account `cli|<hash of CODEX_HOME>`). Both can exist at
+    /// once after a mode switch, so when they disagree the store the CLI wrote
+    /// to most recently (`last_refresh`) wins. The folder is only required —
+    /// and only asked for — when the Keychain holds no login.
     private static func loadCodex() throws -> Loaded? {
-        guard let raw = try readJSONObject("auth.json", in: .codexData) else { return nil }
+        let fromKeychain = codexKeychainJSON().flatMap { parseCodex($0, source: .codexKeychain) }
+        let fromFile: Loaded?
+        do {
+            fromFile = try readJSONObject("auth.json", in: .codexData).flatMap { parseCodex($0, source: .codexFile) }
+        } catch {
+            guard let fromKeychain else { throw error }
+            return fromKeychain
+        }
+        switch (fromKeychain, fromFile) {
+        case let (keychain?, file?):
+            return codexLastRefresh(file) > codexLastRefresh(keychain) ? file : keychain
+        case let (keychain?, nil):
+            return keychain
+        case let (nil, file):
+            return file
+        }
+    }
+
+    private static func parseCodex(_ raw: [String: Any], source: Source) -> Loaded? {
         let root = JSON(raw)
         if let access = root["tokens"]["access_token"].string, !access.isEmpty {
             // Codex needs the opaque `account_id` UUID at request time (sent
@@ -281,13 +321,36 @@ enum LocalCredentials {
             return Loaded(access: access, refresh: root["tokens"]["refresh_token"].string,
                           accountID: root["tokens"]["account_id"].string,
                           displayName: email,
-                          source: .codexFile, apiKey: nil, raw: raw)
+                          source: source, apiKey: nil, raw: raw)
         }
         if let key = root["OPENAI_API_KEY"].string, !key.isEmpty {
             return Loaded(access: "", refresh: nil, accountID: nil, displayName: nil,
-                          source: .codexFile, apiKey: key, raw: raw)
+                          source: source, apiKey: key, raw: raw)
         }
         return nil
+    }
+
+    /// `last_refresh` as a date; the file writes whole seconds, the Keychain
+    /// copy fractional ones. Missing/unparseable sorts oldest.
+    private static func codexLastRefresh(_ loaded: Loaded) -> Date {
+        guard let raw = loaded.raw["last_refresh"] as? String else { return .distantPast }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: raw) ?? ISO8601DateFormatter().date(from: raw) ?? .distantPast
+    }
+
+    private static func codexKeychainJSON() -> [String: Any]? {
+        keychainLock.lock()
+        defer { keychainLock.unlock() }
+        if let cached = cachedCodexKeychain { return cached }
+        // The account hash depends on the install's CODEX_HOME, so match on
+        // the service alone and only insist on the CLI's `cli|` prefix.
+        guard let item = readKeychainItem("Codex Auth", nil),
+              item.account?.hasPrefix("cli|") ?? true,
+              let text = keychainString(item.data) else { return nil }
+        let json = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any]
+        cachedCodexKeychain = json
+        return json
     }
 
     // MARK: Antigravity
@@ -493,8 +556,9 @@ enum LocalCredentials {
             guard writable else { throw CocoaError(.fileWriteNoPermission) }
         }
         switch loaded.source {
-        case .claudeKeychain, .claudeFile:
-            // Never exchanged: the CLI owns Claude's single-use refresh token.
+        case .claudeKeychain, .claudeFile, .codexKeychain:
+            // Never exchanged: the CLI owns these single-use refresh tokens
+            // and we don't write into its Keychain items.
             return loaded
         case .codexFile:
             return try await refreshCodex(loaded, refreshToken: refreshToken)
@@ -596,12 +660,13 @@ enum LocalCredentials {
     }
 
     /// The CLI auth file a refreshed token is written back to; nil for sources
-    /// that are never written (Claude, Antigravity, Copilot).
+    /// that are never written (Claude, Antigravity, Copilot, Keychain Codex).
     private static func authFile(_ source: Source) -> (ExternalResource, String)? {
         switch source {
         case .codexFile: return (.codexData, "auth.json")
         case .grokFile: return (.grokData, "auth.json")
-        case .claudeKeychain, .claudeFile, .antigravityKeychain, .copilotKeychain, .copilotConfig: return nil
+        case .claudeKeychain, .claudeFile, .codexKeychain, .antigravityKeychain, .copilotKeychain, .copilotConfig:
+            return nil
         }
     }
 

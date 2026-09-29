@@ -232,6 +232,85 @@ struct LocalCredentialsAccessTests {
         }
     }
 
+    private func codexAuth(access: String, refresh: String = "r", lastRefresh: String?) -> [String: Any] {
+        var json: [String: Any] = [
+            "auth_mode": "chatgpt",
+            "tokens": ["access_token": access, "refresh_token": refresh, "account_id": "acct"],
+        ]
+        if let lastRefresh { json["last_refresh"] = lastRefresh }
+        return json
+    }
+
+    private func codexKeychain(_ json: [String: Any], account: String = "cli|199c3b95ffbb66f1") throws -> [String: LocalCredentials.KeychainItem] {
+        ["Codex Auth": LocalCredentials.KeychainItem(data: try JSONSerialization.data(withJSONObject: json), account: account)]
+    }
+
+    @Test func codexKeychainLoginNeedsNoFolderGrant() async throws {
+        let sandbox = try Sandbox()
+        let keychain = try codexKeychain(codexAuth(access: "kc", lastRefresh: "2026-09-26T06:50:59.123Z"))
+        try await withAccess(sandbox.access, keychain: keychain) {
+            let credential = try await LocalCredentials.credential(for: .codex)
+            guard case let .oauth(token, account, _) = credential else {
+                Issue.record("expected an OAuth credential, got \(String(describing: credential))")
+                return
+            }
+            #expect(token == "kc")
+            #expect(account == "acct")
+            #expect(!sandbox.access.isAuthorized(.codexData))
+        }
+    }
+
+    @Test func codexIgnoresKeychainItemsThatAreNotTheCLIs() async throws {
+        let sandbox = try Sandbox()
+        let keychain = try codexKeychain(codexAuth(access: "other", lastRefresh: nil), account: "something-else")
+        await withAccess(sandbox.access, keychain: keychain) {
+            // Not the CLI's item, and no folder grant: access is still required.
+            await #expect(throws: SecurityScopedAccessError.notAuthorized(.codexData)) {
+                _ = try await LocalCredentials.credential(for: .codex)
+            }
+        }
+    }
+
+    @Test(arguments: [
+        // (keychain last_refresh, file last_refresh, expected winner)
+        ("2026-09-26T06:50:59.123Z", "2026-09-26T05:54:00Z", "kc"),
+        ("2026-09-26T05:54:00.000Z", "2026-09-26T06:50:59Z", "file"),
+        (nil, "2026-09-26T06:50:59Z", "file"),
+        ("2026-09-26T06:50:59.123Z", nil, "kc"),
+    ] as [(String?, String?, String)])
+    func codexNewerStoreWinsWhenBothExist(keychainStamp: String?, fileStamp: String?, winner: String) async throws {
+        let sandbox = try Sandbox()
+        let codex = try sandbox.folder(".codex", files: ["auth.json": codexAuth(access: "file", lastRefresh: fileStamp)])
+        try sandbox.access.authorize(.codexData, url: codex)
+        let keychain = try codexKeychain(codexAuth(access: "kc", lastRefresh: keychainStamp))
+        try await withAccess(sandbox.access, keychain: keychain) {
+            let credential = try await LocalCredentials.credential(for: .codex)
+            guard case let .oauth(token, _, _) = credential else {
+                Issue.record("expected an OAuth credential, got \(String(describing: credential))")
+                return
+            }
+            #expect(token == winner)
+        }
+    }
+
+    @Test func codexKeychainRefreshOnlyRereads() async throws {
+        let sandbox = try Sandbox()
+        let keychain = try codexKeychain(codexAuth(access: "kc_new", lastRefresh: "2026-09-26T06:50:59.123Z"))
+        await withAccess(sandbox.access, keychain: keychain) {
+            // The CLI rotated the token: the re-read picks it up.
+            let stale = Credential.oauth(accessToken: "kc_old", accountID: "acct", displayName: nil)
+            guard case let .oauth(token, _, _) = await LocalCredentials.forceRefresh(.codex, after: stale) else {
+                Issue.record("expected the rotated token")
+                return
+            }
+            #expect(token == "kc_new")
+            // Same token still stored: never exchange the Keychain refresh
+            // token ourselves, so there's nothing to retry with.
+            let same = Credential.oauth(accessToken: "kc_new", accountID: "acct", displayName: nil)
+            #expect(await LocalCredentials.forceRefresh(.codex, after: same) == nil)
+        }
+    }
+
     @Test func copilotRefreshRereadsRotatedKeychainToken() async throws {
         let sandbox = try Sandbox()
         let keychain = ["copilot-cli": item("gho_new", account: "https://github.com:octocat")]

@@ -10,7 +10,7 @@ import Foundation
 /// | -------------- | ------------------------------------- | ------ |
 /// | `claudeData`   | `.credentials.json` (Keychain fallback) | read |
 /// |                | `settings.json` (telemetry auto-config) | read/write |
-/// | `codexData`    | `auth.json`                            | read, write-back of refreshed tokens |
+/// | `codexData`    | `auth.json`                            | read, write-back of refreshed tokens (not needed when the login is in the `Codex Auth` Keychain item) |
 /// | `grokData`     | `auth.json`                            | read, write-back of refreshed tokens |
 /// | `githubConfig` | `hosts.yml` (gh) or `apps.json` / `hosts.json` (github-copilot) | read (fallback when neither the `copilot-cli` nor `gh:github.com` Keychain item exists) |
 ///
@@ -70,6 +70,8 @@ enum ExternalResource: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .githubConfig:
             return "Status reads your existing GitHub CLI login from its config folder. Choose your gh folder (or github-copilot) inside .config to allow Status to access it."
+        case .codexData:
+            return "Status reads your existing Codex login from its data folder. Choose your .codex folder to allow Status to access it. Alternatively, set cli_auth_credentials_store = \"keyring\" in ~/.codex/config.toml and run codex login again — Status then reads the login from the Keychain and needs no folder."
         default:
             return "Status reads your existing \(owner) login from its data folder. Choose your \(folderName) folder to allow Status to access it."
         }

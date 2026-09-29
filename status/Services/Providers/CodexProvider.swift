@@ -4,7 +4,8 @@ import os
 private let log = Logger(subsystem: "app.status", category: "provider.codex")
 
 /// Codex subscription session limits, read using the **Codex CLI** login
-/// (ChatGPT OAuth in `~/.codex/auth.json`) — no API key required.
+/// (ChatGPT OAuth in `~/.codex/auth.json`, or the `Codex Auth` Keychain item
+/// in keyring mode) — no API key required.
 ///
 /// The Codex back-end emits the account's rate-limit state as **response
 /// headers** on `POST /backend-api/codex/responses` (per

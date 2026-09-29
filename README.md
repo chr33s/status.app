@@ -61,12 +61,16 @@ there. The grant is remembered across launches — change or remove it under
 **Settings → Providers**. If the folder is moved or deleted, the tab shows
 **Access needs to be granted again**. Access required is never reported as
 “Not signed in”. Antigravity (Keychain only) needs no folder, and neither do
-Claude or Copilot when their login is in the Keychain.
+Claude, Copilot, or Codex when their login is in the Keychain (for Codex, set
+`cli_auth_credentials_store = "keyring"` in `~/.codex/config.toml` and sign in
+again). Keychain-held Codex and Claude logins are never refreshed by Status —
+their refresh tokens are single-use — so an expired one shows **Session
+expired** until the CLI itself refreshes it.
 
 | Provider | CLI | Credential read | Usage source |
 |----------|-----|-----------------|--------------|
 | Claude | Claude Code (`claude`) | `Claude Code-credentials` Keychain item, or `~/.claude/.credentials.json` | OAuth probe → `anthropic-ratelimit-unified-*` headers → Session (5h) / Weekly (7d) |
-| Codex | Codex CLI (`codex login`) | `~/.codex/auth.json` | ChatGPT OAuth → streamed `rate_limits.primary` / `.secondary` |
+| Codex | Codex CLI (`codex login`) | `Codex Auth` Keychain item (with `cli_auth_credentials_store = "keyring"`), else `~/.codex/auth.json` in a granted `~/.codex`; when both exist the newer `last_refresh` wins | ChatGPT OAuth → streamed `rate_limits.primary` / `.secondary` |
 | Antigravity | Antigravity app / `agy` | `gemini` / `antigravity` Keychain item (read-only; refreshed tokens kept in memory) | Cloud Code `v1internal:retrieveUserQuotaSummary` → Gemini + Claude pools, Session (5h) / Weekly; falls back to `retrieveUserQuota` |
 | Copilot | Copilot CLI (`copilot login`) or GitHub CLI (`gh auth login`) | `copilot-cli` or `gh:github.com` Keychain item; else `apps.json` / `hosts.json` in a granted `~/.config/github-copilot`, or `hosts.yml` in a granted `~/.config/gh` | `GET /users/{login}/settings/billing/usage` |
 
