@@ -37,7 +37,7 @@ struct ClaudeProvider: UsageProviding {
 
     init(
         transport: @escaping Transport = { url, headers, body in
-            try await HTTPClient.send(url, method: "POST", headers: headers, body: body)
+            try await HTTPClient.send(url, method: "POST", headers: headers, body: body, failOnError: false)
         },
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
@@ -82,6 +82,12 @@ struct ClaudeProvider: UsageProviding {
         var snapshot = UsageSnapshot()
         snapshot.planName = displayName ?? "Claude Code"
         snapshot.sections = Self.sections(from: result, now: now())
+        // Exhausted subscriptions return 429 with the same quota headers.
+        // Keep those meters, but propagate all other HTTP failures.
+        if !(200..<300).contains(result.status),
+           !(result.status == 429 && !snapshot.sections.isEmpty) {
+            throw ProviderError.http(status: result.status, body: String(result.text.prefix(280)))
+        }
 
         if snapshot.sections.isEmpty {
             let status = result.header("anthropic-ratelimit-unified-status") ?? "active"
@@ -133,6 +139,6 @@ struct ClaudeProvider: UsageProviding {
     }
 
     private static func number(_ result: HTTPResult, _ name: String) -> Double? {
-        result.header(name).flatMap(Double.init)
+        result.header(name).flatMap(Double.init).flatMap { $0.isFinite ? $0 : nil }
     }
 }

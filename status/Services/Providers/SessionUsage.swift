@@ -5,18 +5,21 @@ import Foundation
 enum SessionUsage {
     /// Interprets a reset value that may be a unix timestamp (seconds) or an
     /// RFC3339 string, returning the absolute reset date.
-    static func resetDate(from raw: String?) -> Date? {
+    static func resetDate(from raw: String?, now: Date = Date()) -> Date? {
         guard let raw, !raw.isEmpty else { return nil }
         if let epoch = Double(raw) {
+            guard epoch.isFinite else { return nil }
             // Heuristic: values far in the future are absolute epochs; small
             // values are "seconds from now".
             return epoch > 10_000_000_000
                 ? Date(timeIntervalSince1970: epoch / 1000)
                 : (epoch > 1_000_000_000
                     ? Date(timeIntervalSince1970: epoch)
-                    : Date().addingTimeInterval(epoch))
+                    : now.addingTimeInterval(epoch))
         }
-        return ISO8601DateFormatter().date(from: raw)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: raw) ?? ISO8601DateFormatter().date(from: raw)
     }
 
     /// Builds a meter from a "window" object of the shape returned by Codex:
@@ -48,7 +51,7 @@ enum SessionUsage {
             leading: Format.percentUsed(fraction),
             trailing: nil
         )
-        if let date = resetDate(from: reset) {
+        if let date = resetDate(from: reset, now: now) {
             section.trailing = Format.resetCountdown(to: date, now: now)
         }
         return section
@@ -58,7 +61,7 @@ enum SessionUsage {
     /// time — Anthropic's current Claude Code unified rate-limit headers
     /// (`anthropic-ratelimit-unified-{5h,7d}-utilization`).
     static func utilizationSection(title: String, utilization: Double?, reset: String?, now: Date = Date()) -> UsageSection? {
-        guard let utilization else { return nil }
+        guard let utilization, utilization.isFinite else { return nil }
         let fraction = min(max(utilization, 0), 1)
         var section = UsageSection(
             title: title,
@@ -66,7 +69,7 @@ enum SessionUsage {
             leading: Format.percentUsed(fraction),
             trailing: nil
         )
-        if let date = resetDate(from: reset) {
+        if let date = resetDate(from: reset, now: now) {
             section.trailing = Format.resetCountdown(to: date, now: now)
         }
         return section

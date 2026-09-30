@@ -327,4 +327,117 @@ struct LocalCredentialsAccessTests {
             #expect(await LocalCredentials.forceRefresh(.copilot, after: unchanged) == nil)
         }
     }
+
+    @Test func codexRefreshPersistsRotationAndPreservesMetadata() async throws {
+        let sandbox = try Sandbox()
+        let folder = try sandbox.folder(".codex", files: ["auth.json": codexAuth(access: "old", lastRefresh: nil)])
+        try sandbox.access.authorize(.codexData, url: folder)
+        let originalRequest = LocalCredentials.refreshRequest
+        defer { LocalCredentials.refreshRequest = originalRequest }
+        LocalCredentials.refreshRequest = { _, _, _ in
+            // A CLI configuration edit made while the exchange was pending.
+            var raw = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent("auth.json"))) as? [String: Any])
+            raw["new_metadata"] = "keep"
+            try JSONSerialization.data(withJSONObject: raw).write(to: folder.appendingPathComponent("auth.json"))
+            return .stub(["access_token": "new", "refresh_token": "rotated"])
+        }
+        try await withAccess(sandbox.access) {
+            let failed = Credential.oauth(accessToken: "old", accountID: nil, displayName: nil)
+            let credential = await LocalCredentials.forceRefresh(.codex, after: failed)
+            guard case let .oauth(token, _, _) = credential else { Issue.record("expected rotation"); return }
+            #expect(token == "new")
+            let json = JSON(try JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent("auth.json"))))
+            #expect(json["tokens"]["refresh_token"].string == "rotated")
+            #expect(json["new_metadata"].string == "keep")
+        }
+    }
+
+    @Test func concurrentCLIRotationWinsOverOurRefresh() async throws {
+        let sandbox = try Sandbox()
+        let folder = try sandbox.folder(".codex", files: ["auth.json": codexAuth(access: "old", lastRefresh: nil)])
+        try sandbox.access.authorize(.codexData, url: folder)
+        let originalRequest = LocalCredentials.refreshRequest
+        defer { LocalCredentials.refreshRequest = originalRequest }
+        let cliRaw = codexAuth(access: "cli_new", refresh: "cli_refresh", lastRefresh: nil)
+        let cliData = try JSONSerialization.data(withJSONObject: cliRaw)
+        LocalCredentials.refreshRequest = { _, _, _ in
+            try cliData.write(to: folder.appendingPathComponent("auth.json"))
+            return .stub(["access_token": "our_new", "refresh_token": "our_refresh"])
+        }
+        await withAccess(sandbox.access) {
+            let failed = Credential.oauth(accessToken: "old", accountID: nil, displayName: nil)
+            guard case let .oauth(token, _, _) = await LocalCredentials.forceRefresh(.codex, after: failed) else {
+                Issue.record("expected CLI rotation"); return
+            }
+            #expect(token == "cli_new")
+        }
+        #expect(try Data(contentsOf: folder.appendingPathComponent("auth.json")) == cliData)
+    }
+
+    @Test func failedWriteBackDoesNotReportSuccessfulRefresh() async throws {
+        let sandbox = try Sandbox()
+        let folder = try sandbox.folder(".codex", files: ["auth.json": codexAuth(access: "old", lastRefresh: nil)])
+        try sandbox.access.authorize(.codexData, url: folder)
+        let originalRequest = LocalCredentials.refreshRequest
+        defer { LocalCredentials.refreshRequest = originalRequest }
+        LocalCredentials.refreshRequest = { _, _, _ in
+            // Simulate the folder grant being removed during the request.
+            sandbox.access.revoke(.codexData)
+            return .stub(["access_token": "new", "refresh_token": "rotated"])
+        }
+        await withAccess(sandbox.access) {
+            let failed = Credential.oauth(accessToken: "old", accountID: nil, displayName: nil)
+            #expect(await LocalCredentials.forceRefresh(.codex, after: failed) == nil)
+        }
+    }
+
+    @Test func unwritableDirectoryPreventsSpendingARefreshToken() async throws {
+        let sandbox = try Sandbox()
+        let folder = try sandbox.folder(".codex", files: ["auth.json": codexAuth(access: "old", lastRefresh: nil)])
+        try sandbox.access.authorize(.codexData, url: folder)
+        let originalRequest = LocalCredentials.refreshRequest
+        defer {
+            LocalCredentials.refreshRequest = originalRequest
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder.path)
+        LocalCredentials.refreshRequest = { _, _, _ in
+            Issue.record("must not exchange a token when atomic write-back cannot create a file")
+            return .stub(["access_token": "new"])
+        }
+        await withAccess(sandbox.access) {
+            let failed = Credential.oauth(accessToken: "old", accountID: nil, displayName: nil)
+            #expect(await LocalCredentials.forceRefresh(.codex, after: failed) == nil)
+        }
+    }
+
+    @Test func grokRefreshUpdatesTheSameEntryAndPreservesOtherLogins() async throws {
+        let sandbox = try Sandbox()
+        let key = "https://auth.x.ai::a"
+        let otherKey = "https://auth.x.ai::z"
+        let folder = try sandbox.folder(".grok", files: ["auth.json": [
+            key: ["key": "old", "refresh_token": "r", "email": "me@example.com"],
+            otherKey: ["key": "other", "refresh_token": "other_refresh"],
+        ]])
+        try sandbox.access.authorize(.grokData, url: folder)
+        let originalRequest = LocalCredentials.refreshRequest
+        defer { LocalCredentials.refreshRequest = originalRequest }
+        LocalCredentials.refreshRequest = { _, headers, body in
+            #expect(headers["Content-Type"] == "application/x-www-form-urlencoded")
+            #expect(String(data: body, encoding: .utf8)?.contains("client_id=a") == true)
+            return .stub(["access_token": "new", "refresh_token": "rotated", "expires_in": 3600])
+        }
+        try await withAccess(sandbox.access) {
+            let failed = Credential.oauth(accessToken: "old", accountID: nil, displayName: nil)
+            guard case let .oauth(token, _, _) = await LocalCredentials.forceRefresh(.grok, after: failed) else {
+                Issue.record("expected Grok rotation"); return
+            }
+            #expect(token == "new")
+            let json = JSON(try JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent("auth.json"))))
+            #expect(json[key]["refresh_token"].string == "rotated")
+            #expect(json[key]["email"].string == "me@example.com")
+            #expect(json[otherKey]["key"].string == "other")
+            #expect(json[otherKey]["refresh_token"].string == "other_refresh")
+        }
+    }
 }

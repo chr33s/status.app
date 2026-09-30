@@ -70,10 +70,10 @@ struct CodexProviderTests {
         }
     }
 
-    @Test func transportFailureYieldsNote() async throws {
-        let snapshot = try await Self.provider(.failure(URLError(.timedOut))).fetch(.oauth)
-        #expect(snapshot.sections.isEmpty)
-        #expect(snapshot.note != nil)
+    @Test func transportFailurePropagatesToPreserveStaleUsage() async {
+        await #expect(throws: URLError.self) {
+            _ = try await Self.provider(.failure(URLError(.timedOut))).fetch(.oauth)
+        }
     }
 
     @Test func noHeadersYieldsNote() async throws {

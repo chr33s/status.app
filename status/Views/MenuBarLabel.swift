@@ -25,6 +25,8 @@ struct MenuBarLabel: View {
             }
         }
         .task {
+            guard ProcessInfo.processInfo.environment["STATUS_TESTING"] != "1",
+                  NSClassFromString("XCTestCase") == nil else { return }
             store.startAutoRefresh()
             telemetry.start()
             if settings.telemetryAutoConfigured {

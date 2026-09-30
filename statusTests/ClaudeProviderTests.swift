@@ -70,6 +70,23 @@ struct ClaudeProviderTests {
         #expect(snapshot.note?.contains("status: allowed") == true)
     }
 
+    @Test func exhaustedQuotaStillShowsMeters() async throws {
+        let snapshot = try await Self.provider(.success(.stub(headers: [
+            "anthropic-ratelimit-unified-5h-utilization": "1",
+        ], status: 429))).fetch(.oauth)
+        #expect(snapshot.sections.first?.fraction == 1)
+    }
+
+    @Test(arguments: [401, 403, 429, 500])
+    func unsuccessfulResponseWithoutQuotaThrows(status: Int) async {
+        await #expect {
+            _ = try await Self.provider(.success(.stub(status: status))).fetch(.oauth)
+        } throws: { error in
+            if case let .http(code, _) = error as? ProviderError { return code == status }
+            return false
+        }
+    }
+
     @Test(arguments: [401, 403])
     func unauthorizedPropagates(status: Int) async {
         await #expect {

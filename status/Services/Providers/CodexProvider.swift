@@ -85,6 +85,7 @@ struct CodexProvider: UsageProviding {
             throw error
         } catch {
             log.error("probe failed: \(error.localizedDescription, privacy: .public)")
+            throw error
         }
 
         if snapshot.sections.isEmpty {
@@ -138,7 +139,7 @@ struct CodexProvider: UsageProviding {
 
     /// Builds a meter from one `x-codex-{primary,secondary}-*` header trio.
     static func headerSection(title: String, prefix: String, in result: HTTPResult, now: Date = Date()) -> UsageSection? {
-        guard let percent = result.header("\(prefix)-used-percent").flatMap(Double.init) else {
+        guard let percent = result.header("\(prefix)-used-percent").flatMap(Double.init), percent.isFinite else {
             return nil
         }
         let fraction = min(max(percent / 100, 0), 1)
@@ -149,7 +150,7 @@ struct CodexProvider: UsageProviding {
             trailing: nil
         )
         if let resetAt = result.header("\(prefix)-reset-at"),
-           let date = SessionUsage.resetDate(from: resetAt) {
+           let date = SessionUsage.resetDate(from: resetAt, now: now) {
             section.trailing = Format.resetCountdown(to: date, now: now)
         }
         return section

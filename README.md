@@ -7,6 +7,7 @@ subscription usage at a glance for:
 - **Claude** — Anthropic
 - **Antigravity** — Google
 - **GitHub Copilot** — GitHub
+- **Grok** — xAI
 
 **No API keys.** Every provider reuses the login of its existing CLI (Claude
 Code, Codex, Antigravity, GitHub). Nothing is entered by hand and nothing leaves your
@@ -18,7 +19,7 @@ Mac except requests to each provider's own API.
 - Tabbed strip to switch between providers; the selected tab is tinted with the
   provider's brand colour. A red dot marks a provider needing attention.
 - Per-provider detail: usage meters (Session / Weekly / per-model quota, plus
-  Copilot premium requests & month-to-date spend).
+  Copilot premium requests and Grok extra-usage caps).
 - **Automatic token refresh** — expired OAuth tokens are refreshed via the CLI's
   client and written back so the CLI stays in sync.
 - **Sign-in prompt** — when a token is expired/invalid and can't be refreshed
@@ -37,7 +38,7 @@ Mac except requests to each provider's own API.
 
 - Xcode 16 or later (the project uses Xcode 16's file-system-synchronized
   groups, `objectVersion = 77`).
-- Built against the latest macOS SDK; deployment target **macOS 14.0+**.
+- Built against the latest macOS SDK; deployment target **macOS 26.0+**.
 
 ## Build & run
 
@@ -70,9 +71,10 @@ expired** until the CLI itself refreshes it.
 | Provider | CLI | Credential read | Usage source |
 |----------|-----|-----------------|--------------|
 | Claude | Claude Code (`claude`) | `Claude Code-credentials` Keychain item, or `~/.claude/.credentials.json` | OAuth probe → `anthropic-ratelimit-unified-*` headers → Session (5h) / Weekly (7d) |
-| Codex | Codex CLI (`codex login`) | `Codex Auth` Keychain item (with `cli_auth_credentials_store = "keyring"`), else `~/.codex/auth.json` in a granted `~/.codex`; when both exist the newer `last_refresh` wins | ChatGPT OAuth → streamed `rate_limits.primary` / `.secondary` |
+| Codex | Codex CLI (`codex login`) | `Codex Auth` Keychain item (with `cli_auth_credentials_store = "keyring"`), else `~/.codex/auth.json` in a granted `~/.codex`; when both exist the newer `last_refresh` wins | ChatGPT OAuth → `x-codex-primary-*` / `x-codex-secondary-*` response headers |
 | Antigravity | Antigravity app / `agy` | `gemini` / `antigravity` Keychain item (read-only; refreshed tokens kept in memory) | Cloud Code `v1internal:retrieveUserQuotaSummary` → Gemini + Claude pools, Session (5h) / Weekly; falls back to `retrieveUserQuota` |
-| Copilot | Copilot CLI (`copilot login`) or GitHub CLI (`gh auth login`) | `copilot-cli` or `gh:github.com` Keychain item; else `apps.json` / `hosts.json` in a granted `~/.config/github-copilot`, or `hosts.yml` in a granted `~/.config/gh` | `GET /users/{login}/settings/billing/usage` |
+| Grok | Grok CLI (`grok login`) | OIDC entries in a granted `~/.grok/auth.json`, or `XAI_API_KEY` / `GROK_API_KEY` in the app environment | `GET /v1/billing?format=credits` → weekly shared pool and extra-usage cap |
+| Copilot | Copilot CLI (`copilot login`) or GitHub CLI (`gh auth login`) | `copilot-cli` or `gh:github.com` Keychain item; else `apps.json` / `hosts.json` in a granted `~/.config/github-copilot`, or `hosts.yml` in a granted `~/.config/gh` | `GET /copilot_internal/user` → premium requests / chat / completions quotas |
 
 ### Sandbox & folder access
 
@@ -136,9 +138,12 @@ usage; the probes give the subscription Session/Weekly/quota windows on demand.
 
 ## Token refresh & re-authentication
 
-- When an OAuth access token is expired (from its stored expiry / JWT `exp`) — or
-  a request returns 401 — the app refreshes it via the CLI's OAuth client and
-  **writes the rotated token back** to the same store.
+- When a request returns 401/403, the app re-reads the CLI login and retries
+  with a newer token if available. For file-backed Codex and Grok logins it
+  can exchange the refresh token and **write the rotation back**; a concurrent
+  CLI login wins over that exchange. Claude and Keychain-backed Codex logins
+  are only re-read. Antigravity refreshes are held in memory. Grok also detects
+  expired JWTs before requesting usage.
 - If the refresh fails (no/invalid refresh token), the provider switches to a
   **“Session expired”** state showing the CLI's login command (`claude auth
   login`, `codex login --device-auth`, `agy`, `copilot login`, `grok login`).
@@ -158,14 +163,14 @@ between CLI releases. Each is isolated for easy adjustment:
 - Antigravity quota — `AntigravityProvider` (`v1internal:retrieveUserQuotaSummary`,
   reverse-engineered as in [openusage](https://github.com/robinebers/openusage);
   legacy per-model buckets are pooled by worst remaining fraction).
-- Copilot billing — the `gh` OAuth token may lack the **billing / "Plan"** read
-  permission the usage endpoint needs, returning 403 → re-auth. If so, grant it
-  with `gh auth refresh -s read:org` (or use a token with Plan access).
+- Copilot quotas — the internal entitlement endpoint expects a recognised
+  Copilot client identity. A 401/403 asks for a fresh CLI login; adding `read:org`
+  is not a billing-permission fix.
 - OAuth clients / token endpoints / write-back — `LocalCredentials`. Writing a
   rotated refresh token back into another tool's store keeps the CLI consistent,
   but if a rotation isn't persisted correctly it could log that CLI out. Refresh
-  runs only when a token is actually expired (or after a 401), writes atomically,
-  and falls back to the existing token on failure.
+  runs after an authentication failure, writes atomically, and reports a
+  failed write-back instead of claiming that the CLI store was updated.
 
 Responses are parsed defensively via the `JSON` helper rather than rigid Codable
 models, so minor schema changes are tolerated; otherwise the tab degrades to a

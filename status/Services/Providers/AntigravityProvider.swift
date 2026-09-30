@@ -166,7 +166,7 @@ struct AntigravityProvider: UsageProviding {
     static func section(title: String, remaining: Double, reset: String?, now: Date = Date()) -> UsageSection {
         let used = min(max(1 - remaining, 0), 1)
         var section = UsageSection(title: title, fraction: used, leading: Format.percentUsed(used), trailing: nil)
-        if let date = SessionUsage.resetDate(from: reset) {
+        if let date = SessionUsage.resetDate(from: reset, now: now) {
             section.trailing = Format.resetCountdown(to: date, now: now)
         }
         return section

@@ -98,7 +98,7 @@ struct CopilotProvider: UsageProviding {
         var section = UsageSection(
             title: title,
             fraction: used,
-            leading: "\(Int(remaining.rounded())) / \(Int(entitlement.rounded())) left",
+            leading: String(format: "%.0f / %.0f left", remaining.rounded(), entitlement.rounded()),
             trailing: nil
         )
         if let reset { section.trailing = Format.resetCountdown(to: reset, now: now) }

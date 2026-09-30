@@ -128,7 +128,7 @@ private struct TelemetrySection: View {
                     row("Cost", Format.currency(usage.cost))
                 }
                 if usage.requests > 0 {
-                    row("Requests", String(Int(usage.requests)))
+                    row("Requests", Format.compact(usage.requests))
                 }
                 Text("Live from \(provider.cliName) since launch")
                     .font(.footnote).foregroundStyle(.tertiary)

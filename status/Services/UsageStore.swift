@@ -20,8 +20,18 @@ final class UsageStore {
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var didStart = false
     @ObservationIgnored private var didAutoSelect = false
+    @ObservationIgnored private var refreshTasks: [Provider: Task<Void, Never>] = [:]
+    @ObservationIgnored private let loadCredential: (Provider) async throws -> Credential?
+    @ObservationIgnored private let fetchUsage: (Provider, Credential) async throws -> UsageSnapshot
 
-    init() {
+    init(
+        loadCredential: @escaping (Provider) async throws -> Credential? = { try await LocalCredentials.credential(for: $0) },
+        fetchUsage: @escaping (Provider, Credential) async throws -> UsageSnapshot = {
+            try await ProviderFactory.make($0).fetch(ProviderRequest(credential: $1))
+        }
+    ) {
+        self.loadCredential = loadCredential
+        self.fetchUsage = fetchUsage
         // Seed as loading without touching the Keychain/disk on the main thread;
         // the first refresh resolves real state asynchronously.
         for provider in Provider.allCases {
@@ -79,7 +89,24 @@ final class UsageStore {
         }
     }
 
-    func refresh(_ provider: Provider) async {
+    func refresh(_ provider: Provider, resetCache: Bool = false) async {
+        // Timer refreshes join an existing request. A user re-check waits for
+        // it to finish, then reads the credentials again. OAuth exchanges for
+        // one provider must never overlap (refresh tokens can be single-use).
+        while let task = refreshTasks[provider] {
+            await task.value
+            if !resetCache { return }
+        }
+        let task = Task {
+            if resetCache { LocalCredentials.resetCache(for: provider) }
+            await performRefresh(provider)
+            refreshTasks[provider] = nil
+        }
+        refreshTasks[provider] = task
+        await task.value
+    }
+
+    private func performRefresh(_ provider: Provider) async {
         if case .needsReauth = states[provider] {
             LocalCredentials.resetCache(for: provider)
         }
@@ -88,7 +115,7 @@ final class UsageStore {
         let lastSnapshot = states[provider]?.snapshot
         let found: Credential?
         do {
-            found = try await LocalCredentials.credential(for: provider)
+            found = try await loadCredential(provider)
         } catch let error as SecurityScopedAccessError {
             // No permission to look isn't the same as not signed in.
             states[provider] = .authorizationRequired(error.resource, lost: error == .accessLost(error.resource))
@@ -103,14 +130,13 @@ final class UsageStore {
         }
         states[provider] = .loading
 
-        let impl = ProviderFactory.make(provider)
         do {
-            states[provider] = .loaded(try await fetch(impl, credential))
+            states[provider] = .loaded(try await fetchUsage(provider, credential))
         } catch let error as ProviderError where error.isUnauthorized {
             // Token expired/invalid: try one forced refresh + retry, else prompt re-auth.
             if let refreshed = await LocalCredentials.forceRefresh(provider, after: credential) {
                 do {
-                    states[provider] = .loaded(try await fetch(impl, refreshed))
+                    states[provider] = .loaded(try await fetchUsage(provider, refreshed))
                 } catch let retry as ProviderError where retry.isUnauthorized {
                     states[provider] = .needsReauth(reauthMessage(provider), stale: lastSnapshot)
                 } catch {
@@ -122,10 +148,6 @@ final class UsageStore {
         } catch {
             states[provider] = .failed(error.localizedDescription, stale: lastSnapshot)
         }
-    }
-
-    private func fetch(_ impl: UsageProviding, _ credential: Credential) async throws -> UsageSnapshot {
-        try await impl.fetch(ProviderRequest(credential: credential))
     }
 
     private func reauthMessage(_ provider: Provider) -> String {
@@ -140,8 +162,7 @@ final class UsageStore {
     /// Called by the settings UI / re-check actions.
     func reload(_ provider: Provider) {
         Task {
-            LocalCredentials.resetCache(for: provider)
-            await refresh(provider)
+            await refresh(provider, resetCache: true)
             publishToWidgets()
         }
     }

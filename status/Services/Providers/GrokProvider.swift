@@ -104,7 +104,7 @@ struct GrokProvider: UsageProviding {
                 leading: Format.percentUsed(fraction),
                 trailing: nil
             )
-            if let end = resetDate(period["end"].string) {
+            if let end = SessionUsage.resetDate(from: period["end"].string, now: now) {
                 weekly.trailing = Format.resetCountdown(to: end, now: now)
             }
             sections.append(weekly)
@@ -114,7 +114,7 @@ struct GrokProvider: UsageProviding {
         sections.append(UsageSection(
             title: "Extra Usage",
             fraction: nil,
-            leading: cap > 0 ? "\(Int(cap.rounded())) cap" : "Disabled",
+            leading: cap > 0 ? String(format: "%.0f cap", cap.rounded()) : "Disabled",
             trailing: nil
         ))
         return sections
@@ -124,15 +124,6 @@ struct GrokProvider: UsageProviding {
     static func parsePlanName(_ json: JSON) -> String? {
         guard let tier = json["subscription_tier_display"].string, !tier.isEmpty else { return nil }
         return tier
-    }
-
-    /// ISO-8601 with or without fractional seconds, or an epoch.
-    private static func resetDate(_ raw: String?) -> Date? {
-        if let date = SessionUsage.resetDate(from: raw) { return date }
-        guard let raw else { return nil }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.date(from: raw)
     }
 
     /// Decodes a JWT's payload claims without signature verification (the token

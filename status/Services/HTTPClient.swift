@@ -81,13 +81,15 @@ struct JSON {
     }
 
     var double: Double? {
+        let number: Double?
         switch value {
-        case let v as Double: return v
-        case let v as Int: return Double(v)
-        case let v as NSNumber: return v.doubleValue
-        case let v as String: return Double(v)
-        default: return nil
+        case let v as Double: number = v
+        case let v as Int: number = Double(v)
+        case let v as NSNumber: number = v.doubleValue
+        case let v as String: number = Double(v)
+        default: number = nil
         }
+        return number.flatMap { $0.isFinite ? $0 : nil }
     }
 
     var string: String? {

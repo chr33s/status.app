@@ -14,6 +14,9 @@ import Foundation
 /// folder; without a grant `configure`/`revert` throw
 /// `SecurityScopedAccessError` and the UI asks for the folder.
 enum OTelSetup {
+    static var access = SecurityScopedAccess.shared
+    static var defaults = UserDefaults.standard
+    private static let settingsLock = NSLock()
     /// Whether a provider can be configured automatically (JSON) or needs a
     /// manual snippet.
     static func isAutomatic(_ provider: Provider) -> Bool {
@@ -36,7 +39,7 @@ enum OTelSetup {
             let settings = try? withClaudeSettings { readJSON($0) }
             let env = settings?["env"] as? [String: Any]
             return (env?["OTEL_EXPORTER_OTLP_ENDPOINT"] as? String) == endpoint
-                && env?["CLAUDE_CODE_ENABLE_TELEMETRY"] != nil
+                && (env?["CLAUDE_CODE_ENABLE_TELEMETRY"] as? String) == "1"
         default:
             return false
         }
@@ -44,7 +47,9 @@ enum OTelSetup {
 
     /// Runs `operation` on `settings.json` inside the granted `.claude` folder.
     private static func withClaudeSettings<T>(_ operation: (URL) throws -> T) throws -> T {
-        try SecurityScopedAccess.shared.withAccess(to: .claudeData) { root in
+        settingsLock.lock()
+        defer { settingsLock.unlock() }
+        return try access.withAccess(to: .claudeData) { root in
             guard let file = SecurityScopedAccess.file("settings.json", in: root) else {
                 throw CocoaError(.fileNoSuchFile)
             }
@@ -67,22 +72,57 @@ enum OTelSetup {
     private static func configureClaude(endpoint: String) throws {
         try withClaudeSettings { file in
             // An existing file that doesn't parse is left alone rather than clobbered.
-            if FileManager.default.fileExists(atPath: file.path), readJSON(file) == nil { return }
-            var root = readJSON(file) ?? [:]
+            let existing = readJSON(file)
+            if FileManager.default.fileExists(atPath: file.path), existing == nil {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            var root = existing ?? [:]
+            if let env = root["env"], !(env is [String: Any]) {
+                throw CocoaError(.fileReadCorruptFile)
+            }
             var env = root["env"] as? [String: Any] ?? [:]
-            for (key, value) in claudeEnv(endpoint) { env[key] = value }
+            let applied = claudeEnv(endpoint)
+            let backupKey = backupKey(file)
+            let backup = defaults.data(forKey: backupKey).flatMap {
+                (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any]
+            }
+            // Keep the original values across automatic reconfiguration on launch.
+            let previous = backup?["previous"] as? [String: Any]
+                ?? env.filter { applied[$0.key] != nil }
+            let backupData = try JSONSerialization.data(withJSONObject: ["previous": previous, "applied": applied])
+            for (key, value) in applied { env[key] = value }
             root["env"] = env
-            writeJSON(root, to: file)
+            try writeJSON(root, to: file)
+            defaults.set(backupData, forKey: backupKey)
         }
     }
 
     private static func revertClaude() throws {
         try withClaudeSettings { file in
-            guard var root = readJSON(file), var env = root["env"] as? [String: Any] else { return }
-            for key in claudeEnv("").keys { env.removeValue(forKey: key) }
+            guard FileManager.default.fileExists(atPath: file.path) else { return }
+            guard var root = readJSON(file) else { throw CocoaError(.fileReadCorruptFile) }
+            guard let existingEnv = root["env"] else { return }
+            guard var env = existingEnv as? [String: Any] else { throw CocoaError(.fileReadCorruptFile) }
+            let backupKey = backupKey(file)
+            let backup = defaults.data(forKey: backupKey).flatMap {
+                (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any]
+            }
+            let previous = backup?["previous"] as? [String: Any] ?? [:]
+            // Older versions didn't retain a backup. Only remove their known
+            // local collector values, leaving later user edits alone.
+            let applied = backup?["applied"] as? [String: String] ?? claudeEnv("http://localhost:4318")
+            for (key, value) in applied where env[key] as? String == value {
+                if let old = previous[key] { env[key] = old }
+                else { env.removeValue(forKey: key) }
+            }
             root["env"] = env
-            writeJSON(root, to: file)
+            try writeJSON(root, to: file)
+            defaults.removeObject(forKey: backupKey)
         }
+    }
+
+    private static func backupKey(_ file: URL) -> String {
+        "telemetry.claude.backup." + file.resolvingSymlinksInPath().path
     }
 
     // MARK: Manual snippets (Codex + Copilot)
@@ -114,10 +154,8 @@ enum OTelSetup {
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
 
-    private static func writeJSON(_ object: [String: Any], to url: URL) {
-        guard JSONSerialization.isValidJSONObject(object),
-              let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
-        else { return }
-        try? data.write(to: url, options: .atomic)
+    private static func writeJSON(_ object: [String: Any], to url: URL) throws {
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: url, options: .atomic)
     }
 }

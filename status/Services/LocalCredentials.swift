@@ -41,6 +41,10 @@ enum LocalCredentials {
 
     /// Owner of the user's folder grants. Replaced only by tests.
     static var access = SecurityScopedAccess.shared
+    /// Injectable so refresh/write-back tests never contact an OAuth server.
+    static var refreshRequest: (URL, [String: String], Data) async throws -> HTTPResult = { url, headers, body in
+        try await HTTPClient.send(url, method: "POST", headers: headers, body: body)
+    }
 
     /// A generic-password Keychain item: its secret and the account it's filed
     /// under (the CLIs store the GitHub login there).
@@ -450,8 +454,8 @@ enum LocalCredentials {
     /// First entry in `auth.json` that looks like a Grok OIDC login (key
     /// namespaced under `auth.x.ai`).
     private static func grokOIDCEntry(in raw: [String: Any]) -> (String, [String: Any])? {
-        for (key, value) in raw where key.contains("auth.x.ai") {
-            if let entry = value as? [String: Any] { return (key, entry) }
+        for key in raw.keys.sorted() where key.contains("auth.x.ai") {
+            if let entry = raw[key] as? [String: Any] { return (key, entry) }
         }
         return nil
     }
@@ -551,7 +555,9 @@ enum LocalCredentials {
         // dead token and log it out.
         if let (resource, name) = authFile(loaded.source) {
             let writable = try access.withAccess(to: resource) { root in
-                SecurityScopedAccess.file(name, in: root).map { FileManager.default.isWritableFile(atPath: $0.path) } ?? false
+                // Atomic replacement also requires creating a sibling file.
+                FileManager.default.isWritableFile(atPath: root.path)
+                    && (SecurityScopedAccess.file(name, in: root).map { FileManager.default.isWritableFile(atPath: $0.path) } ?? false)
             }
             guard writable else { throw CocoaError(.fileWriteNoPermission) }
         }
@@ -575,9 +581,8 @@ enum LocalCredentials {
         let body = try JSONSerialization.data(withJSONObject: [
             "grant_type": "refresh_token", "refresh_token": refreshToken, "client_id": codexClientID,
         ])
-        let result = try await HTTPClient.send(codexTokenURL, method: "POST",
-            headers: ["Content-Type": "application/json"], body: body)
-        guard let access = result.json["access_token"].string else { return loaded }
+        let result = try await refreshRequest(codexTokenURL, ["Content-Type": "application/json"], body)
+        guard let access = result.json["access_token"].string, !access.isEmpty else { return loaded }
 
         var updated = loaded
         updated.access = access
@@ -588,8 +593,7 @@ enum LocalCredentials {
         if let refresh = updated.refresh { tokens["refresh_token"] = refresh }
         updated.raw["tokens"] = tokens
         updated.raw["last_refresh"] = ISO8601DateFormatter().string(from: Date())
-        persist(updated.raw, to: updated.source)
-        return updated
+        return try persist(updated, after: loaded)
     }
 
     private static func refreshGrok(_ loaded: Loaded, refreshToken: String) async throws -> Loaded {
@@ -604,9 +608,9 @@ enum LocalCredentials {
             "client_id": clientID,
         ].map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) ?? $0.value)" }
             .joined(separator: "&")
-        let result = try await HTTPClient.send(grokTokenURL, method: "POST",
-            headers: ["Content-Type": "application/x-www-form-urlencoded"], body: Data(form.utf8))
-        guard let access = result.json["access_token"].string else { return loaded }
+        let result = try await refreshRequest(grokTokenURL,
+            ["Content-Type": "application/x-www-form-urlencoded"], Data(form.utf8))
+        guard let access = result.json["access_token"].string, !access.isEmpty else { return loaded }
 
         var updated = loaded
         updated.access = access
@@ -620,8 +624,7 @@ enum LocalCredentials {
             newEntry["expires_at"] = formatter.string(from: Date().addingTimeInterval(expiresIn))
         }
         updated.raw[entryKey] = newEntry
-        persist(updated.raw, to: updated.source)
-        return updated
+        return try persist(updated, after: loaded)
     }
 
     private static func refreshAntigravity(_ loaded: Loaded, refreshToken: String) async throws -> Loaded {
@@ -632,9 +635,9 @@ enum LocalCredentials {
             "grant_type": "refresh_token",
         ].map { "\($0.key)=\($0.value.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) ?? $0.value)" }
             .joined(separator: "&")
-        let result = try await HTTPClient.send(googleTokenURL, method: "POST",
-            headers: ["Content-Type": "application/x-www-form-urlencoded"], body: Data(form.utf8))
-        guard let access = result.json["access_token"].string else { return loaded }
+        let result = try await refreshRequest(googleTokenURL,
+            ["Content-Type": "application/x-www-form-urlencoded"], Data(form.utf8))
+        guard let access = result.json["access_token"].string, !access.isEmpty else { return loaded }
 
         var updated = loaded
         updated.access = access
@@ -646,17 +649,62 @@ enum LocalCredentials {
 
     // MARK: Write-back
 
-    /// Returns whether the rotated tokens actually reached the CLI's store.
-    @discardableResult
-    private static func persist(_ raw: [String: Any], to source: Source) -> Bool {
-        guard let (resource, name) = authFile(source),
-              let data = try? JSONSerialization.data(withJSONObject: raw, options: .prettyPrinted)
-        else { return false }
-        return (try? access.withAccess(to: resource) { root -> Bool in
-            guard let file = SecurityScopedAccess.file(name, in: root) else { return false }
+    /// Never report a successful rotation unless it reached the CLI's store.
+    private static func persist(_ updated: Loaded, after original: Loaded) throws -> Loaded {
+        guard let (resource, name) = authFile(updated.source) else { throw CocoaError(.fileWriteUnknown) }
+        return try access.withAccess(to: resource) { root in
+            guard let file = SecurityScopedAccess.file(name, in: root) else { throw CocoaError(.fileWriteInvalidFileName) }
+            let currentData = try Data(contentsOf: file)
+            guard let raw = try JSONSerialization.jsonObject(with: currentData) as? [String: Any] else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            let current: Loaded?
+            switch updated.source {
+            case .codexFile: current = parseCodex(raw, source: .codexFile)
+            case .grokFile:
+                if let (_, entry) = grokOIDCEntry(in: raw), let token = entry["key"] as? String {
+                    var loaded = original
+                    loaded.raw = raw
+                    loaded.access = token
+                    loaded.refresh = entry["refresh_token"] as? String
+                    current = loaded
+                } else { current = nil }
+            default: current = nil
+            }
+            guard var current, current.apiKey == nil, !current.access.isEmpty else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            // The CLI may have signed in or rotated while our exchange was
+            // awaiting the network. Its newer credentials win; never replace
+            // them with the result of an exchange for the old login.
+            guard current.access == original.access, current.refresh == original.refresh else { return current }
+            var merged = raw
+            switch updated.source {
+            case .codexFile:
+                var tokens = raw["tokens"] as? [String: Any] ?? [:]
+                let newTokens = updated.raw["tokens"] as? [String: Any] ?? [:]
+                for key in ["access_token", "refresh_token", "id_token"] {
+                    if let value = newTokens[key] { tokens[key] = value }
+                }
+                merged["tokens"] = tokens
+                merged["last_refresh"] = updated.raw["last_refresh"]
+            case .grokFile:
+                guard let (key, entry) = grokOIDCEntry(in: raw),
+                      let newEntry = updated.raw[key] as? [String: Any] else { throw CocoaError(.fileReadCorruptFile) }
+                var mergedEntry = entry
+                for field in ["key", "refresh_token", "expires_at"] {
+                    if let value = newEntry[field] { mergedEntry[field] = value }
+                }
+                merged[key] = mergedEntry
+            default: throw CocoaError(.fileWriteUnknown)
+            }
+            let data = try JSONSerialization.data(withJSONObject: merged, options: .prettyPrinted)
             try data.write(to: file, options: .atomic)
-            return true
-        }) ?? false
+            current.access = updated.access
+            current.refresh = updated.refresh
+            current.raw = merged
+            return current
+        }
     }
 
     /// The CLI auth file a refreshed token is written back to; nil for sources

@@ -8,7 +8,8 @@ final class TelemetryStore {
     private(set) var usage: [Provider: TelemetryUsage] = [:]
     private(set) var isRunning = false
 
-    @ObservationIgnored let server = OTLPServer()
+    @ObservationIgnored let server: OTLPServer
+    @ObservationIgnored private var listenerGeneration = 0
     var port: UInt16 { server.port }
     var endpoint: String { "http://localhost:\(server.port)" }
 
@@ -19,23 +20,46 @@ final class TelemetryStore {
     @ObservationIgnored nonisolated(unsafe) private var pending: [Provider: TelemetryUsage] = [:]
     @ObservationIgnored nonisolated(unsafe) private var flushScheduled = false
 
+    init(server: OTLPServer = OTLPServer()) {
+        self.server = server
+    }
+
     func start() {
         guard !isRunning else { return }
+        listenerGeneration &+= 1
+        let generation = listenerGeneration
         server.onRequest = { [weak self] path, body in
             guard path.hasSuffix("/v1/metrics") else { return } // ignore logs/traces
             let deltas = OTelMetricsParser.parse(body)
             guard !deltas.isEmpty else { return }
             self?.enqueue(deltas)
         }
+        server.onStateChange = { [weak self] state in
+            Task { @MainActor in
+                guard let self, generation == self.listenerGeneration else { return }
+                switch state {
+                case .ready:
+                    self.isRunning = true
+                case .failed(let error):
+                    self.isRunning = false
+                    self.server.stop()
+                    NSLog("OTLP collector failed on port \(self.server.port): \(error.localizedDescription)")
+                case .cancelled:
+                    self.isRunning = false
+                default:
+                    break
+                }
+            }
+        }
         do {
             try server.start()
-            isRunning = true
         } catch {
             NSLog("OTLP collector failed to start on port \(server.port): \(error.localizedDescription)")
         }
     }
 
     func stop() {
+        listenerGeneration &+= 1
         server.stop()
         isRunning = false
     }

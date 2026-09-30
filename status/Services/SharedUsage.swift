@@ -26,7 +26,10 @@ enum SharedUsage {
     /// Team-prefixed so macOS grants the group without provisioning changes.
     /// Must match the `com.apple.security.application-groups` entitlement on
     /// both targets ($(TeamIdentifierPrefix)dev.chr33s.status).
-    static let appGroupID = "72KB9YQR7B.dev.chr33s.status"
+    static var appGroupID: String {
+        Bundle.main.object(forInfoDictionaryKey: "StatusAppGroupIdentifier") as? String
+            ?? "72KB9YQR7B.dev.chr33s.status"
+    }
 
     /// WidgetKit kind for the quota-rings widget; used for targeted reloads.
     static let widgetKind = "QuotaRings"
