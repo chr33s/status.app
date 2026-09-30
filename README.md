@@ -74,6 +74,36 @@ expired** until the CLI itself refreshes it.
 | Antigravity | Antigravity app / `agy` | `gemini` / `antigravity` Keychain item (read-only; refreshed tokens kept in memory) | Cloud Code `v1internal:retrieveUserQuotaSummary` → Gemini + Claude pools, Session (5h) / Weekly; falls back to `retrieveUserQuota` |
 | Copilot | Copilot CLI (`copilot login`) or GitHub CLI (`gh auth login`) | `copilot-cli` or `gh:github.com` Keychain item; else `apps.json` / `hosts.json` in a granted `~/.config/github-copilot`, or `hosts.yml` in a granted `~/.config/gh` | `GET /users/{login}/settings/billing/usage` |
 
+### Sandbox & folder access
+
+Everything Status touches outside its container is a user-granted CLI folder
+(`ExternalResource` in `SecurityScopedAccess.swift`). All reads and writes run
+inside `SecurityScopedAccess.withAccess(to:)`, which resolves the bookmark,
+refreshes it if stale, and brackets the work with
+`start/stopAccessingSecurityScopedResource()`. Bookmarks are app-scoped and
+stored in `UserDefaults`; folders are requested only when a provider needs one,
+never all at first launch.
+
+| Resource | Folder | Files | Access |
+|----------|--------|-------|--------|
+| `claudeData` | `~/.claude` | `.credentials.json` (Keychain fallback); `settings.json` (telemetry auto-config) | read; read/write |
+| `codexData` | `~/.codex` | `auth.json` | read + write-back of refreshed tokens |
+| `grokData` | `~/.grok` | `auth.json` | read + write-back of refreshed tokens |
+| `githubConfig` | `~/.config/gh` or `~/.config/github-copilot` | `hosts.yml` / `apps.json` / `hosts.json` | read |
+
+A selected folder is checked against the resource's expected structure before
+it's saved (an empty folder with the right name is accepted). Folder
+authorization is kept separate from sign-in state:
+
+| State | Shown as |
+|-------|----------|
+| No bookmark | **Access required** + *Choose … Folder* |
+| Bookmark invalid / folder moved | **Access needs to be granted again** |
+| Authorized, no credential | **Not signed in** + CLI login command |
+| Authorized, expired and not refreshable | **Session expired** + CLI login command |
+
+Existing CLI credentials are never copied into the app's container.
+
 If a CLI is configured with a plain API key instead of an OAuth login
 (`OPENAI_API_KEY` in `auth.json`, `XAI_API_KEY` for Grok), the
 app uses it where it can but notes that subscription limits aren't available.
@@ -199,4 +229,28 @@ Expect `com.apple.security.app-sandbox`,
 `com.apple.security.files.user-selected.read-write`, and
 `com.apple.security.files.bookmarks.app-scope` (needed to persist the folder
 grants as app-scoped bookmarks) set to true, and no
-`com.apple.security.temporary-exception.*` keys.
+`com.apple.security.files.bookmarks.document-scope` or
+`com.apple.security.temporary-exception.*` keys. The Info.plist must not contain
+`NSAppleEventsUsageDescription`.
+
+## Testing
+
+Unit tests (`statusTests/`) cover the provider → resource mapping, paths
+resolving beneath granted roots, missing/stale/replaced bookmarks, access
+required vs. not signed in, and the exact (no trailing newline) copied login
+command.
+
+Manual checks use a signed, sandboxed **Release** build. For each folder-backed
+provider:
+
+1. Start with no bookmark → tab shows **Access required**.
+2. Cancel the picker → app stays usable.
+3. Pick the wrong folder → recovery message, nothing saved.
+4. Pick the right folder → credential is found and usage loads.
+5. Quit and relaunch → access persists with no picker.
+6. Exercise token refresh / write-back where applicable.
+7. Move or remove the folder → **Access needs to be granted again**.
+
+For re-authentication: force a missing/expired login, confirm the displayed
+command, **Copy** gives the exact command, **Copy & Open Terminal** activates
+Terminal without typing anything, then sign in manually and **Re-check**.
