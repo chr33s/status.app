@@ -120,24 +120,29 @@ struct SecurityScopedAccessTests {
     }
 }
 
-/// Swaps `LocalCredentials.access` and `readKeychainItem`, which are global —
-/// so serialized. The Keychain is always stubbed so these never read (or
-/// prompt for) the developer's real logins.
+/// Swaps `LocalCredentials.access`, `readKeychainItem`, and
+/// `readKeychainItemViaSecurityTool`, which are global — so serialized. The
+/// Keychain and the `security` tool are always stubbed so these never read
+/// (or prompt for) the developer's real logins.
 @Suite(.serialized)
 struct LocalCredentialsAccessTests {
     private func withAccess(
         _ access: SecurityScopedAccess,
         keychain: [String: LocalCredentials.KeychainItem] = [:],
+        securityTool: @escaping (String) -> Data? = { _ in nil },
         _ body: () async throws -> Void
     ) async rethrows {
         let originalAccess = LocalCredentials.access
         let originalKeychain = LocalCredentials.readKeychainItem
+        let originalTool = LocalCredentials.readKeychainItemViaSecurityTool
         LocalCredentials.access = access
         LocalCredentials.readKeychainItem = { service, _ in keychain[service] }
+        LocalCredentials.readKeychainItemViaSecurityTool = securityTool
         for provider in Provider.allCases { LocalCredentials.resetCache(for: provider) }
         defer {
             LocalCredentials.access = originalAccess
             LocalCredentials.readKeychainItem = originalKeychain
+            LocalCredentials.readKeychainItemViaSecurityTool = originalTool
             for provider in Provider.allCases { LocalCredentials.resetCache(for: provider) }
         }
         try await body()
@@ -145,6 +150,72 @@ struct LocalCredentialsAccessTests {
 
     private func item(_ secret: String, account: String?) -> LocalCredentials.KeychainItem {
         LocalCredentials.KeychainItem(data: Data(secret.utf8), account: account)
+    }
+
+    // MARK: Claude Code
+
+    private func claudeJSON(access: String) throws -> Data {
+        try JSONSerialization.data(withJSONObject: [
+            "claudeAiOauth": ["accessToken": access, "refreshToken": "r", "subscriptionType": "max"],
+        ])
+    }
+
+    @Test func claudeLoginIsReadThroughTheSecurityTool() async throws {
+        let sandbox = try Sandbox()
+        let json = try claudeJSON(access: "tool_token")
+        var toolServices: [String] = []
+        let originalKeychain = LocalCredentials.readKeychainItem
+        defer { LocalCredentials.readKeychainItem = originalKeychain }
+        try await withAccess(sandbox.access, securityTool: { service in
+            toolServices.append(service)
+            return json
+        }) {
+            // The direct read must not run: it is what prompts after a rotation.
+            LocalCredentials.readKeychainItem = { _, _ in
+                Issue.record("direct Keychain read must not happen when the security tool succeeds")
+                return nil
+            }
+            let credential = try await LocalCredentials.credential(for: .claude)
+            guard case let .oauth(token, _, display) = credential else {
+                Issue.record("expected an OAuth credential, got \(String(describing: credential))")
+                return
+            }
+            #expect(token == "tool_token")
+            #expect(display == "Claude Max")
+            // Cached: a second lookup doesn't spawn the tool again.
+            _ = try await LocalCredentials.credential(for: .claude)
+            #expect(toolServices == ["Claude Code-credentials"])
+        }
+    }
+
+    @Test func claudeFallsBackToDirectKeychainReadWhenToolFails() async throws {
+        let sandbox = try Sandbox()
+        let keychain = ["Claude Code-credentials": LocalCredentials.KeychainItem(data: try claudeJSON(access: "direct_token"), account: "me")]
+        try await withAccess(sandbox.access, keychain: keychain) {
+            let credential = try await LocalCredentials.credential(for: .claude)
+            guard case let .oauth(token, _, _) = credential else {
+                Issue.record("expected an OAuth credential, got \(String(describing: credential))")
+                return
+            }
+            #expect(token == "direct_token")
+        }
+    }
+
+    @Test func claudeRefreshRereadsRotatedTokenThroughTheSecurityTool() async throws {
+        let sandbox = try Sandbox()
+        let rotated = try claudeJSON(access: "new")
+        await withAccess(sandbox.access, securityTool: { _ in rotated }) {
+            // The CLI rotated the token: the re-read (no prompt) picks it up.
+            let stale = Credential.oauth(accessToken: "old", accountID: nil, displayName: nil)
+            guard case let .oauth(token, _, _) = await LocalCredentials.forceRefresh(.claude, after: stale) else {
+                Issue.record("expected the rotated token")
+                return
+            }
+            #expect(token == "new")
+            // Same token still stored: nothing to retry with, surface re-auth.
+            let same = Credential.oauth(accessToken: "new", accountID: nil, displayName: nil)
+            #expect(await LocalCredentials.forceRefresh(.claude, after: same) == nil)
+        }
     }
 
     @Test func missingGrantIsDistinctFromMissingLogin() async throws {

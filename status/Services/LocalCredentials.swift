@@ -5,8 +5,10 @@ import Security
 /// so the app can show real usage without asking for any API key. When a request
 /// returns 401 the caller asks `forceRefresh` to exchange the refresh token.
 ///
-/// Keychain items are read directly (the read prompts the user for access).
-/// CLI files are read only inside folders the user granted through
+/// Keychain items are read directly (the read prompts the user for access),
+/// except Claude Code's, which is read through `/usr/bin/security` — see
+/// `readKeychainItemViaSecurityTool` for why. CLI files are read only inside
+/// folders the user granted through
 /// `SecurityScopedAccess`; without a grant the lookup throws
 /// `SecurityScopedAccessError` so the UI can ask for the folder rather than
 /// report the provider as signed out. Providers with a Keychain login (Claude,
@@ -69,6 +71,41 @@ enum LocalCredentials {
               let attributes = item as? [String: Any],
               let data = attributes[kSecValueData as String] as? Data else { return nil }
         return KeychainItem(data: data, account: attributes[kSecAttrAccount as String] as? String)
+    }
+
+    /// Reads a generic-password item's secret through
+    /// `security find-generic-password -s <service> -w`, the way the Claude
+    /// Code CLI itself reads it. Nil when the tool fails or the item is missing.
+    ///
+    /// Why a subprocess: Claude Code rotates its token with
+    /// `security add-generic-password -U`. Changing an item's data makes the
+    /// Security framework re-create the item's storage group and reset its
+    /// `partition_id` ACL to the writer's partition (`apple-tool:`), while the
+    /// trusted-application list is preserved. So after every rotation this app
+    /// is still a trusted application but its `teamid:` partition is gone, and
+    /// a direct `SecItemCopyMatching` prompts for the keychain password again
+    /// no matter how often the user chose "Always Allow". `/usr/bin/security`
+    /// is the item's creator and always in its partition list, so a read
+    /// through it never prompts. Verified from inside the App Sandbox.
+    ///
+    /// Replaced by tests so they never spawn the tool against the real Keychain.
+    static var readKeychainItemViaSecurityTool: (_ service: String) -> Data? = { service in
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = ["find-generic-password", "-s", service, "-w"]
+        let stdout = Pipe()
+        process.standardOutput = stdout
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        do { try process.run() } catch { return nil }
+        // Drain before waiting so a large secret can't fill the pipe and deadlock.
+        let output = stdout.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0,
+              let text = String(data: output, encoding: .utf8) else { return nil }
+        // `-w` appends a newline; the stored JSON has none.
+        let trimmed = text.trimmingCharacters(in: .newlines)
+        return trimmed.isEmpty ? nil : Data(trimmed.utf8)
     }
 
     // MARK: Public API
@@ -250,20 +287,27 @@ enum LocalCredentials {
 
     /// Serializes Keychain reads/writes so concurrent refreshes can't stack
     /// permission prompts, and caches the decoded JSON so subsequent syncs
-    /// read from memory. Each fresh read can prompt when the process fails
-    /// dynamic code-signature validation (e.g. running under the debugger),
-    /// so reads are kept to launch and refresh-token failure.
+    /// read from memory. Each fresh direct read can prompt (and even a granted
+    /// item prompts again once the CLI has rotated it — see
+    /// `readKeychainItemViaSecurityTool`), so reads are kept to launch and
+    /// refresh-token failure.
     private static let keychainLock = NSLock()
     private static var cachedClaudeKeychain: [String: Any]?
     private static var cachedCodexKeychain: [String: Any]?
     private static var cachedAntigravityKeychain: [String: Any]?
     private static var cachedCopilotKeychain: (token: String, login: String?)?
 
+    private static let claudeKeychainService = "Claude Code-credentials"
+
+    /// Reads through the `security` tool first (never prompts — see
+    /// `readKeychainItemViaSecurityTool`); the direct Keychain read is only a
+    /// fallback for when the tool can't be run.
     private static func claudeKeychainJSON() -> [String: Any]? {
         keychainLock.lock()
         defer { keychainLock.unlock() }
         if let cached = cachedClaudeKeychain { return cached }
-        guard let data = keychainData(service: "Claude Code-credentials") else { return nil }
+        guard let data = readKeychainItemViaSecurityTool(claudeKeychainService)
+                ?? keychainData(service: claudeKeychainService) else { return nil }
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         cachedClaudeKeychain = json
         return json

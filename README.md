@@ -68,9 +68,19 @@ again). Keychain-held Codex and Claude logins are never refreshed by Status —
 their refresh tokens are single-use — so an expired one shows **Session
 expired** until the CLI itself refreshes it.
 
+Claude Code's Keychain item is read by running
+`security find-generic-password -s "Claude Code-credentials" -w` rather than
+through the Keychain API. Each time the CLI rotates its token it rewrites the
+item with `security add-generic-password -U`, and macOS resets the item's
+partition list to the writer's (`apple-tool:`) while keeping the trusted-app
+list — so an app that was granted **Always Allow** is prompted for the keychain
+password again after every rotation. The `security` tool is the item's creator
+and is never dropped from that list, so reading through it never prompts. The
+direct Keychain read remains only as a fallback.
+
 | Provider | CLI | Credential read | Usage source |
 |----------|-----|-----------------|--------------|
-| Claude | Claude Code (`claude`) | `Claude Code-credentials` Keychain item, or `~/.claude/.credentials.json` | OAuth probe → `anthropic-ratelimit-unified-*` headers → Session (5h) / Weekly (7d) |
+| Claude | Claude Code (`claude`) | `Claude Code-credentials` Keychain item, read through `/usr/bin/security` (see below), or `~/.claude/.credentials.json` | OAuth probe → `anthropic-ratelimit-unified-*` headers → Session (5h) / Weekly (7d) |
 | Codex | Codex CLI (`codex login`) | `Codex Auth` Keychain item (with `cli_auth_credentials_store = "keyring"`), else `~/.codex/auth.json` in a granted `~/.codex`; when both exist the newer `last_refresh` wins | ChatGPT OAuth → `x-codex-primary-*` / `x-codex-secondary-*` response headers |
 | Antigravity | Antigravity app / `agy` | `gemini` / `antigravity` Keychain item (read-only; refreshed tokens kept in memory) | Cloud Code `v1internal:retrieveUserQuotaSummary` → Gemini + Claude pools, Session (5h) / Weekly; falls back to `retrieveUserQuota` |
 | Grok | Grok CLI (`grok login`) | OIDC entries in a granted `~/.grok/auth.json`, or `XAI_API_KEY` / `GROK_API_KEY` in the app environment | `GET /v1/billing?format=credits` → weekly shared pool and extra-usage cap |
