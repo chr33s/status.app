@@ -9,7 +9,7 @@ private let log = Logger(subsystem: "app.status", category: "provider.antigravit
 /// Mirrors openusage's Cloud Code strategy:
 ///  1. `retrieveUserQuotaSummary` — the authoritative source: two shared pools
 ///     (Gemini, and every non-Gemini model shown as "Claude"), each with a
-///     rolling 5-hour and a weekly window.
+///     weekly window and, on some tiers, a rolling 5-hour window.
 ///  2. Builds without that endpoint fall back to `loadCodeAssist` +
 ///     `retrieveUserQuota`, whose per-model buckets are merged into the two
 ///     pools by keeping each pool's worst remaining fraction (5-hour only).
@@ -17,12 +17,15 @@ private let log = Logger(subsystem: "app.status", category: "provider.antigravit
 /// ── Verify on a real Mac ──
 /// These are `v1internal` (undocumented) endpoints reverse-engineered from the
 /// Antigravity app; shapes are isolated here. Each call tries the daily base
-/// first, then production: accounts metered on the daily deployment get a
-/// "no window open" sentinel (100% remaining) from production, so daily must
-/// win. Only a 401 is propagated so the store can refresh — this API answers
-/// 403 "You do not have a valid license" to well-authenticated requests it
-/// merely dislikes (e.g. quota calls without `project`), which must not be
-/// surfaced as an expired session.
+/// first, then production. The two deployments disagree about the same
+/// account: production answers a "no window open" sentinel (100% remaining)
+/// for accounts metered on daily, while daily omits whole groups (e.g. the
+/// Gemini pool) for some accounts. The quota summary is therefore fetched from
+/// *both* and merged per bucket, lowest remaining fraction wins; other calls
+/// take the first success. Only a 401 is propagated so the store can refresh —
+/// this API answers 403 "You do not have a valid license" to well-authenticated
+/// requests it merely dislikes (e.g. quota calls without `project`), which
+/// must not be surfaced as an expired session.
 struct AntigravityProvider: UsageProviding {
     /// Performs a POST and returns the result, throwing `ProviderError.http` on
     /// non-2xx. Injectable for tests.
@@ -37,7 +40,8 @@ struct AntigravityProvider: UsageProviding {
     static let quotaPath = "v1internal:retrieveUserQuota"
 
     /// Quota-summary buckets matched by exact `bucketId`, in display order. An
-    /// unknown future bucket never silently joins a pool.
+    /// unknown future bucket never silently joins a pool. The 5-hour buckets
+    /// are kept for tiers that still report them.
     static let summaryBuckets: [(id: String, title: String)] = [
         ("gemini-5h", "Session"),
         ("gemini-weekly", "Weekly"),
@@ -80,8 +84,8 @@ struct AntigravityProvider: UsageProviding {
         let project = load?.json["cloudaicompanionProject"].string.flatMap { $0.isEmpty ? nil : $0 }
         let quotaBody: [String: Any] = project.map { ["project": $0] } ?? [:]
 
-        if let summary = try await call(Self.summaryPath, token: token, userAgent: "antigravity", body: quotaBody),
-           let sections = Self.summarySections(in: summary.json, now: now) {
+        let summaries = try await callEveryBase(Self.summaryPath, token: token, userAgent: "antigravity", body: quotaBody)
+        if let sections = Self.summarySections(in: summaries.map(\.json), now: now) {
             // A parsed summary — even an empty one — is authoritative; the legacy
             // path would fabricate "fully used" from missing quota info.
             snapshot.sections = sections
@@ -97,12 +101,25 @@ struct AntigravityProvider: UsageProviding {
         return snapshot
     }
 
-    /// POSTs `path` against each base URL in turn. A 401 (expired/revoked
-    /// token) propagates so the store can refresh — the same token fails
-    /// everywhere. Everything else, including this API's 403 licensing
-    /// response, tries the next base and finally yields nil so the caller
-    /// falls back instead of demanding a needless re-auth.
+    /// POSTs `path` against each base URL in turn and returns the first
+    /// success, or nil when every base failed.
     private func call(_ path: String, token: String, userAgent: String, body: [String: Any]) async throws -> HTTPResult? {
+        try await callBases(path, token: token, userAgent: userAgent, body: body, stopAtFirstSuccess: true).first
+    }
+
+    /// POSTs `path` against every base URL and returns each success, in base
+    /// order. Used for the quota summary, whose deployments must be merged.
+    private func callEveryBase(_ path: String, token: String, userAgent: String, body: [String: Any]) async throws -> [HTTPResult] {
+        try await callBases(path, token: token, userAgent: userAgent, body: body, stopAtFirstSuccess: false)
+    }
+
+    /// A 401 (expired/revoked token) propagates so the store can refresh — the
+    /// same token fails everywhere. Everything else, including this API's 403
+    /// licensing response, is logged and the next base is tried, so the caller
+    /// falls back instead of demanding a needless re-auth.
+    private func callBases(
+        _ path: String, token: String, userAgent: String, body: [String: Any], stopAtFirstSuccess: Bool
+    ) async throws -> [HTTPResult] {
         let payload = try JSONSerialization.data(withJSONObject: body)
         let headers = [
             "Authorization": "Bearer \(token)",
@@ -110,9 +127,11 @@ struct AntigravityProvider: UsageProviding {
             "Accept": "application/json",
             "User-Agent": userAgent,
         ]
+        var results: [HTTPResult] = []
         for base in Self.baseURLs {
             do {
-                return try await transport(base.appendingPathComponent(path), headers, payload)
+                results.append(try await transport(base.appendingPathComponent(path), headers, payload))
+                if stopAtFirstSuccess { break }
             } catch let error as ProviderError {
                 if case let .http(status, message) = error, status == 401 {
                     log.error("\(path, privacy: .public) unauthorized on \(base.host() ?? "", privacy: .public): \(message, privacy: .public)")
@@ -123,7 +142,7 @@ struct AntigravityProvider: UsageProviding {
                 log.notice("\(path, privacy: .public) failed on \(base.host() ?? "", privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
         }
-        return nil
+        return results
     }
 
     // MARK: Parsing
@@ -132,14 +151,29 @@ struct AntigravityProvider: UsageProviding {
     /// has no `groups` (not a summary). Buckets without a usable
     /// `remainingFraction` are dropped rather than guessed.
     static func summarySections(in json: JSON, now: Date = Date()) -> [UsageSection]? {
-        let root = json["response"]["groups"].value == nil ? json : json["response"]
-        guard root["groups"].value != nil else { return nil }
+        summarySections(in: [json], now: now)
+    }
+
+    /// Merges `retrieveUserQuotaSummary` bodies from several deployments into
+    /// up to four pool sections. A bucket reported by more than one deployment
+    /// keeps its lowest remaining fraction, so a host's "no window open"
+    /// sentinel never hides real usage and a host that omits a group never
+    /// hides the group. Nil when no body is a summary (none has `groups`).
+    static func summarySections(in responses: [JSON], now: Date = Date()) -> [UsageSection]? {
         var pooled: [String: JSON] = [:]
-        for bucket in root["groups"].array.flatMap(\.["buckets"].array) {
-            guard let id = bucket["bucketId"].string, pooled[id] == nil,
-                  bucket["remainingFraction"].double != nil else { continue }
-            pooled[id] = bucket
+        var parsedAny = false
+        for json in responses {
+            let root = json["response"]["groups"].value == nil ? json : json["response"]
+            guard root["groups"].value != nil else { continue }
+            parsedAny = true
+            for bucket in root["groups"].array.flatMap(\.["buckets"].array) {
+                guard let id = bucket["bucketId"].string,
+                      let remaining = bucket["remainingFraction"].double else { continue }
+                if let existing = pooled[id]?["remainingFraction"].double, existing <= remaining { continue }
+                pooled[id] = bucket
+            }
         }
+        guard parsedAny else { return nil }
         return summaryBuckets.compactMap { spec in
             pooled[spec.id].map { section(title: spec.title, remaining: $0["remainingFraction"].double ?? 0,
                                           reset: $0["resetTime"].string, now: now) }

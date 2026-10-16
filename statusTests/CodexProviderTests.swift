@@ -3,59 +3,88 @@ import Testing
 @testable import status
 
 struct CodexProviderTests {
-    private static let rateHeaders = [
-        "x-codex-primary-used-percent": "12",
-        "x-codex-primary-reset-at": testResetEpoch,
-        "x-codex-secondary-used-percent": "40",
+    /// A `wham/usage` body: a 5-hour primary window and a weekly secondary.
+    private static let usage: [String: Any] = [
+        "plan_type": "pro",
+        "rate_limit": [
+            "allowed": true,
+            "primary_window": [
+                "used_percent": 12,
+                "limit_window_seconds": 5 * 3_600,
+                "reset_after_seconds": 2 * 3_600 + 30 * 60,
+                "reset_at": Int(testResetEpoch) ?? 0,
+            ],
+            "secondary_window": [
+                "used_percent": 40,
+                "limit_window_seconds": 7 * 24 * 3_600,
+                "reset_after_seconds": 3 * 24 * 3_600,
+            ],
+        ],
     ]
 
     private static func provider(_ response: Result<HTTPResult, Error>) -> CodexProvider {
-        CodexProvider(transport: { url, headers, body in
+        CodexProvider(transport: { url, headers in
             #expect(url == CodexProvider.endpoint)
             #expect(headers["Authorization"] == "Bearer token")
             #expect(headers["chatgpt-account-id"] == "account")
-            let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
-            #expect(json?["store"] as? Bool == false)
             return try response.get()
         }, now: { testNow })
     }
 
-    @Test func headerSectionMapsPercentAndReset() throws {
-        let section = try #require(CodexProvider.headerSection(
-            title: "Session", prefix: "x-codex-primary", in: .stub(headers: Self.rateHeaders), now: testNow
-        ))
+    @Test func windowSectionMapsPercentAndReset() throws {
+        let window = JSON((Self.usage["rate_limit"] as? [String: Any])?["primary_window"])
+        let section = try #require(SessionUsage.windowSection(window, fallbackTitle: "Weekly", now: testNow))
+        #expect(section.title == "Session")
         #expect(section.fraction == 0.12)
         #expect(section.leading == "12% used")
         #expect(section.trailing == "Resets in 2h 30m")
     }
 
-    @Test func headerSectionsUseWindowDurationWhenOrderIsInverted() throws {
-        let sections = CodexProvider.headerSections(in: .stub(headers: [
-            "x-codex-primary-used-percent": "60",
-            "x-codex-primary-window-minutes": "10080",
-            "x-codex-secondary-used-percent": "20",
-            "x-codex-secondary-window-minutes": "300",
-        ]), now: testNow)
+    @Test func windowSectionFallsBackToResetAfterSeconds() throws {
+        let section = try #require(SessionUsage.windowSection(
+            JSON(["used_percent": 5, "reset_after_seconds": 90 * 60]), fallbackTitle: "Weekly", now: testNow
+        ))
+        #expect(section.title == "Weekly")
+        #expect(section.trailing == "Resets in 1h 30m")
+    }
+
+    @Test func sectionsUseWindowDurationWhenOrderIsInverted() throws {
+        let sections = CodexProvider.sections(in: JSON(["rate_limit": [
+            "primary_window": ["used_percent": 60, "limit_window_seconds": 7 * 24 * 3_600],
+            "secondary_window": ["used_percent": 20, "limit_window_seconds": 5 * 3_600],
+        ]]), now: testNow)
 
         #expect(sections.map(\.title) == ["Session", "Weekly"])
         #expect(try #require(sections.first).fraction == 0.20)
         #expect(try #require(sections.last).fraction == 0.60)
     }
 
-    @Test func headerSectionIsClamped() {
-        let section = CodexProvider.headerSection(
-            title: "Weekly", prefix: "x-codex-secondary",
-            in: .stub(headers: ["x-codex-secondary-used-percent": "250"]), now: testNow
-        )
+    /// Single-window plans report `secondary_window: null`, or a zero-length
+    /// placeholder window; neither may become a bogus 0% meter.
+    @Test(arguments: ["null", "zero-length"])
+    func absentSecondaryWindowIsSkipped(shape: String) {
+        let secondary: Any = shape == "null"
+            ? NSNull()
+            : ["used_percent": 0, "limit_window_seconds": 0, "reset_after_seconds": 0]
+        let sections = CodexProvider.sections(in: JSON(["rate_limit": [
+            "primary_window": ["used_percent": 3, "limit_window_seconds": 7 * 24 * 3_600],
+            "secondary_window": secondary,
+        ]]), now: testNow)
+        #expect(sections.map(\.title) == ["Weekly"])
+    }
+
+    @Test func windowSectionIsClamped() {
+        let section = SessionUsage.windowSection(JSON(["used_percent": 250]), fallbackTitle: "Weekly")
         #expect(section?.fraction == 1)
     }
 
     @Test func missingPercentReturnsNil() {
-        #expect(CodexProvider.headerSection(title: "Session", prefix: "x-codex-primary", in: .stub()) == nil)
+        #expect(SessionUsage.windowSection(JSON([:]), fallbackTitle: "Session") == nil)
+        #expect(SessionUsage.windowSection(JSON(nil), fallbackTitle: "Session") == nil)
     }
 
-    @Test func fetchReadsHeadersEvenOn4xx() async throws {
-        let snapshot = try await Self.provider(.success(.stub(headers: Self.rateHeaders, status: 400))).fetch(.oauth)
+    @Test func fetchParsesUsage() async throws {
+        let snapshot = try await Self.provider(.success(.stub(Self.usage))).fetch(.oauth)
         #expect(snapshot.planName == "me@example.com")
         #expect(snapshot.sections.map(\.title) == ["Session", "Weekly"])
         #expect(snapshot.note == nil)
@@ -64,7 +93,7 @@ struct CodexProviderTests {
     @Test(arguments: [401, 403])
     func unauthorizedStatusThrows(status: Int) async {
         await #expect {
-            _ = try await Self.provider(.success(.stub(headers: Self.rateHeaders, status: status))).fetch(.oauth)
+            _ = try await Self.provider(.failure(ProviderError.http(status: status, body: ""))).fetch(.oauth)
         } throws: { error in
             (error as? ProviderError)?.isUnauthorized == true
         }
@@ -76,14 +105,14 @@ struct CodexProviderTests {
         }
     }
 
-    @Test func noHeadersYieldsNote() async throws {
-        let snapshot = try await Self.provider(.success(.stub())).fetch(.oauth)
+    @Test func noWindowsYieldsNote() async throws {
+        let snapshot = try await Self.provider(.success(.stub(["plan_type": "free"]))).fetch(.oauth)
         #expect(snapshot.sections.isEmpty)
         #expect(snapshot.note != nil)
     }
 
     @Test func apiKeyDoesNotProbe() async throws {
-        let provider = CodexProvider(transport: { url, _, _ in
+        let provider = CodexProvider(transport: { url, _ in
             Issue.record("unexpected request to \(url)")
             throw ProviderError.invalidResponse
         })

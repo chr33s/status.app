@@ -7,8 +7,7 @@ struct FormattingTests {
     func nonfiniteJSONNumbersAreIgnored(_ raw: String) {
         #expect(JSON(raw).double == nil)
         #expect(SessionUsage.resetDate(from: raw) == nil)
-        #expect(CodexProvider.headerSection(title: "Session", prefix: "x-codex-primary",
-            in: .stub(headers: ["x-codex-primary-used-percent": raw])) == nil)
+        #expect(SessionUsage.windowSection(JSON(["used_percent": raw]), fallbackTitle: "Session") == nil)
         #expect(ClaudeProvider.sections(from: .stub(headers: [
             "anthropic-ratelimit-unified-5h-utilization": raw,
         ])).isEmpty)

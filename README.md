@@ -81,8 +81,8 @@ direct Keychain read remains only as a fallback.
 | Provider | CLI | Credential read | Usage source |
 |----------|-----|-----------------|--------------|
 | Claude | Claude Code (`claude`) | `Claude Code-credentials` Keychain item, read through `/usr/bin/security` (see below), or `~/.claude/.credentials.json` | OAuth probe → `anthropic-ratelimit-unified-*` headers → Session (5h) / Weekly (7d) |
-| Codex | Codex CLI (`codex login`) | `Codex Auth` Keychain item (with `cli_auth_credentials_store = "keyring"`), else `~/.codex/auth.json` in a granted `~/.codex`; when both exist the newer `last_refresh` wins | ChatGPT OAuth → `x-codex-primary-*` / `x-codex-secondary-*` response headers |
-| Antigravity | Antigravity app / `agy` | `gemini` / `antigravity` Keychain item (read-only; refreshed tokens kept in memory) | Cloud Code `v1internal:retrieveUserQuotaSummary` → Gemini + Claude pools, Session (5h) / Weekly; falls back to `retrieveUserQuota` |
+| Codex | Codex CLI (`codex login`) | `Codex Auth` Keychain item (with `cli_auth_credentials_store = "keyring"`), else `~/.codex/auth.json` in a granted `~/.codex`; when both exist the newer `last_refresh` wins | ChatGPT OAuth → `GET /backend-api/wham/usage` rate-limit windows (the Codex CLI's `/status` source); Session / Weekly chosen by window length, single-window plans show one meter |
+| Antigravity | Antigravity app / `agy` | `gemini` / `antigravity` Keychain item (read-only; refreshed tokens kept in memory) | Cloud Code `v1internal:retrieveUserQuotaSummary` from both the daily and production deployments, merged per bucket (lowest remaining wins) → Gemini + Claude pools, Weekly (plus 5h where the tier reports it); falls back to `retrieveUserQuota` |
 | Grok | Grok CLI (`grok login`) | OIDC entries in a granted `~/.grok/auth.json`, or `XAI_API_KEY` / `GROK_API_KEY` in the app environment | `GET /v1/billing?format=credits` → weekly shared pool and extra-usage cap |
 | Copilot | Copilot CLI (`copilot login`) or GitHub CLI (`gh auth login`) | `copilot-cli` or `gh:github.com` Keychain item; else `apps.json` / `hosts.json` in a granted `~/.config/github-copilot`, or `hosts.yml` in a granted `~/.config/gh` | `GET /copilot_internal/user` → premium requests / chat / completions quotas |
 
@@ -172,7 +172,9 @@ between CLI releases. Each is isolated for easy adjustment:
 - Claude / Codex session limits — `ClaudeProvider` / `CodexProvider` + `SessionUsage`.
 - Antigravity quota — `AntigravityProvider` (`v1internal:retrieveUserQuotaSummary`,
   reverse-engineered as in [openusage](https://github.com/robinebers/openusage);
-  legacy per-model buckets are pooled by worst remaining fraction).
+  the daily and production deployments disagree per account, so both are
+  queried and merged; legacy per-model buckets are pooled by worst remaining
+  fraction).
 - Copilot quotas — the internal entitlement endpoint expects a recognised
   Copilot client identity. A 401/403 asks for a fresh CLI login; adding `read:org`
   is not a billing-permission fix.

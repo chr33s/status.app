@@ -22,19 +22,26 @@ enum SessionUsage {
         return formatter.date(from: raw) ?? ISO8601DateFormatter().date(from: raw)
     }
 
-    /// Builds a meter from a "window" object of the shape returned by Codex:
-    /// `{ used_percent, window_minutes, resets_in_seconds }`.
-    static func windowSection(title: String, _ json: JSON) -> UsageSection? {
+    /// Builds a meter from a rate-limit "window" object of the shape returned
+    /// by Codex's `wham/usage`:
+    /// `{ used_percent, limit_window_seconds, reset_after_seconds, reset_at }`.
+    /// The title is Session for windows under a day and Weekly otherwise;
+    /// `fallbackTitle` applies when the window length is absent. A zero-length
+    /// window is the backend's "no such limit" placeholder and yields nil.
+    static func windowSection(_ json: JSON, fallbackTitle: String, now: Date = Date()) -> UsageSection? {
         guard let percent = json["used_percent"].double else { return nil }
+        let seconds = json["limit_window_seconds"].double
+        if let seconds, seconds <= 0 { return nil }
         let fraction = min(max(percent / 100, 0), 1)
         var section = UsageSection(
-            title: title,
+            title: seconds.map { $0 < 24 * 3_600 ? "Session" : "Weekly" } ?? fallbackTitle,
             fraction: fraction,
             leading: Format.percentUsed(fraction),
             trailing: nil
         )
-        if let resets = json["resets_in_seconds"].double {
-            section.trailing = Format.resetCountdown(to: Date().addingTimeInterval(resets))
+        if let date = resetDate(from: json["reset_at"].string, now: now)
+            ?? json["reset_after_seconds"].double.map({ now.addingTimeInterval($0) }) {
+            section.trailing = Format.resetCountdown(to: date, now: now)
         }
         return section
     }
