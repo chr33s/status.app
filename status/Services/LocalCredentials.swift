@@ -43,6 +43,8 @@ enum LocalCredentials {
 
     /// Owner of the user's folder grants. Replaced only by tests.
     static var access = SecurityScopedAccess.shared
+    /// Environment variable provider (injectable for tests).
+    static var environment: @Sendable () -> [String: String] = { ProcessInfo.processInfo.environment }
     /// Injectable so refresh/write-back tests never contact an OAuth server.
     static var refreshRequest: (URL, [String: String], Data) async throws -> HTTPResult = { url, headers, body in
         try await HTTPClient.send(url, method: "POST", headers: headers, body: body)
@@ -265,10 +267,25 @@ enum LocalCredentials {
         if let raw = claudeKeychainJSON(), let loaded = parseClaude(raw, source: .claudeKeychain) {
             return loaded
         }
-        if let raw = try readJSONObject(".credentials.json", in: .claudeData),
-           let loaded = parseClaude(raw, source: .claudeFile) {
+        var accessError: Error?
+        let raw: [String: Any]?
+        do {
+            raw = try readJSONObject(".credentials.json", in: .claudeData)
+        } catch {
+            raw = nil
+            accessError = error
+        }
+        if let raw, let loaded = parseClaude(raw, source: .claudeFile) {
             return loaded
         }
+        let env = environment()
+        for name in ["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"] {
+            if let value = env[name], !value.isEmpty {
+                return Loaded(access: "", refresh: nil, accountID: nil, displayName: "Anthropic API",
+                              source: .claudeFile, apiKey: value, raw: [:])
+            }
+        }
+        if let accessError { throw accessError }
         return nil
     }
 
@@ -342,21 +359,31 @@ enum LocalCredentials {
     /// and only asked for — when the Keychain holds no login.
     private static func loadCodex() throws -> Loaded? {
         let fromKeychain = codexKeychainJSON().flatMap { parseCodex($0, source: .codexKeychain) }
+        var accessError: Error?
         let fromFile: Loaded?
         do {
             fromFile = try readJSONObject("auth.json", in: .codexData).flatMap { parseCodex($0, source: .codexFile) }
         } catch {
-            guard let fromKeychain else { throw error }
-            return fromKeychain
+            fromFile = nil
+            accessError = error
         }
         switch (fromKeychain, fromFile) {
         case let (keychain?, file?):
             return codexLastRefresh(file) > codexLastRefresh(keychain) ? file : keychain
         case let (keychain?, nil):
             return keychain
-        case let (nil, file):
+        case let (nil, file?):
             return file
+        case (nil, nil):
+            break
         }
+        let env = environment()
+        if let envKey = env["OPENAI_API_KEY"], !envKey.isEmpty {
+            return Loaded(access: "", refresh: nil, accountID: nil, displayName: "OpenAI API",
+                          source: .codexFile, apiKey: envKey, raw: [:])
+        }
+        if let accessError { throw accessError }
+        return nil
     }
 
     private static func parseCodex(_ raw: [String: Any], source: Source) -> Loaded? {
@@ -484,10 +511,10 @@ enum LocalCredentials {
                 )
             }
         }
-        let env = ProcessInfo.processInfo.environment
+        let env = environment()
         for name in ["XAI_API_KEY", "GROK_API_KEY"] {
             if let value = env[name], !value.isEmpty {
-                return Loaded(access: "", refresh: nil, accountID: nil, displayName: nil,
+                return Loaded(access: "", refresh: nil, accountID: nil, displayName: "xAI API",
                               source: .grokFile, apiKey: value, raw: [:])
             }
         }

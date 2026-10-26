@@ -224,4 +224,40 @@ struct AntigravityProviderTests {
     @Test func resetCacheCanBeCalled() {
         LocalCredentials.resetCache(for: .antigravity)
     }
+
+    @Test func geminiSupplementUsesWorstModelAndWeeklyTitle() throws {
+        let now = Date(timeIntervalSince1970: 1_792_000_000)
+        let reset = ISO8601DateFormatter().string(from: now.addingTimeInterval(6 * 86_400))
+        let json = JSON(["buckets": [
+            ["modelId": "gemini-2.5-pro", "remainingFraction": 0.27, "resetTime": reset],
+            ["modelId": "gemini-3-flash", "remainingFraction": 0.5, "resetTime": reset],
+            ["modelId": "claude-sonnet-4-6", "remainingFraction": 1.0, "resetTime": reset],
+        ]])
+        let section = try #require(AntigravityProvider.geminiSupplement(in: json, now: now))
+        #expect(section.title == "Weekly")
+        #expect(abs((section.fraction ?? 0) - 0.73) < 0.001)
+    }
+
+    @Test func geminiSupplementIsNilWithoutGeminiModels() {
+        let json = JSON(["buckets": [["modelId": "claude-sonnet-4-6", "remainingFraction": 1.0]]])
+        #expect(AntigravityProvider.geminiSupplement(in: json) == nil)
+    }
+
+    @Test func summaryWithoutGeminiIsSupplementedFromLegacyQuota() async throws {
+        let now = Date(timeIntervalSince1970: 1_792_000_000)
+        let reset = ISO8601DateFormatter().string(from: now.addingTimeInterval(6 * 86_400))
+        let provider = AntigravityProvider(transport: { url, _, _ in
+            if url.absoluteString.hasSuffix("loadCodeAssist") {
+                return .stub(["cloudaicompanionProject": "p"])
+            }
+            if url.absoluteString.hasSuffix("retrieveUserQuotaSummary") {
+                return .stub(["groups": [["buckets": [
+                    ["bucketId": "3p-weekly", "remainingFraction": 1.0, "resetTime": reset],
+                ]]]])
+            }
+            return .stub(["buckets": [["modelId": "gemini-2.5-pro", "remainingFraction": 0.25, "resetTime": reset]]])
+        }, now: { now })
+        let snapshot = try await provider.fetch(ProviderRequest(credential: .oauth(accessToken: "t", accountID: nil, displayName: nil)))
+        #expect(snapshot.sections.map(\.title) == ["Weekly", "Claude Weekly"])
+    }
 }

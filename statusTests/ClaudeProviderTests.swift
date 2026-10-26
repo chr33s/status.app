@@ -96,16 +96,62 @@ struct ClaudeProviderTests {
         }
     }
 
-    @Test func apiKeyThrowsMissingConfiguration() async {
-        let provider = ClaudeProvider(transport: { url, _, _ in
-            Issue.record("unexpected request to \(url)")
-            throw ProviderError.invalidResponse
-        })
+    @Test func apiKeyProbesWithApiKeyHeaderAndParsesLimits() async throws {
+        let provider = ClaudeProvider(transport: { url, headers, body in
+            #expect(url == ClaudeProvider.endpoint)
+            #expect(headers["x-api-key"] == "key")
+            #expect(headers["Authorization"] == nil)
+            #expect(headers["anthropic-beta"] == nil)
+            let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+            #expect(json?["max_tokens"] as? Int == 1)
+            #expect(json?["system"] == nil)
+            return .stub(headers: [
+                "anthropic-ratelimit-requests-limit": "100",
+                "anthropic-ratelimit-requests-remaining": "80",
+                "anthropic-ratelimit-tokens-limit": "50000",
+                "anthropic-ratelimit-tokens-remaining": "25000",
+            ])
+        }, now: { testNow })
+
+        let snapshot = try await provider.fetch(.apiKey)
+        #expect(snapshot.planName == "Anthropic API")
+        #expect(snapshot.sections.map(\.title) == ["Rate limit", "Tokens"])
+        #expect(snapshot.sections[0].fraction == 0.20)
+        #expect(snapshot.sections[1].fraction == 0.50)
+    }
+
+    @Test(arguments: [401, 403])
+    func apiKeyUnauthorizedPropagates(status: Int) async {
+        let provider = ClaudeProvider(transport: { _, _, _ in
+            .stub(status: status)
+        }, now: { testNow })
+
         await #expect {
             _ = try await provider.fetch(.apiKey)
         } throws: { error in
-            if case .missingConfiguration = error as? ProviderError { return true }
-            return false
+            (error as? ProviderError)?.isUnauthorized == true
         }
+    }
+
+    @Test func overageDisabledShowsDisabledStatus() {
+        let result = HTTPResult.stub(headers: [
+            "anthropic-ratelimit-unified-5h-utilization": "0.69",
+            "anthropic-ratelimit-unified-overage-status": "rejected",
+            "anthropic-ratelimit-unified-overage-disabled-reason": "org_level_disabled",
+        ])
+        let sections = ClaudeProvider.sections(from: result)
+        #expect(sections.map(\.title) == ["Session", "Extra Usage"])
+        #expect(sections[1].leading == "Disabled")
+        #expect(sections[1].fraction == nil)
+    }
+
+    @Test func enabledOverageShowsExtraUsage() {
+        let result = HTTPResult.stub(headers: [
+            "anthropic-ratelimit-unified-5h-utilization": "1",
+            "anthropic-ratelimit-unified-overage-utilization": "0.25",
+        ])
+        let sections = ClaudeProvider.sections(from: result)
+        #expect(sections.map(\.title) == ["Session", "Extra Usage"])
+        #expect(sections[1].fraction == 0.25)
     }
 }

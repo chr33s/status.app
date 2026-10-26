@@ -135,14 +135,17 @@ struct LocalCredentialsAccessTests {
         let originalAccess = LocalCredentials.access
         let originalKeychain = LocalCredentials.readKeychainItem
         let originalTool = LocalCredentials.readKeychainItemViaSecurityTool
+        let originalEnv = LocalCredentials.environment
         LocalCredentials.access = access
         LocalCredentials.readKeychainItem = { service, _ in keychain[service] }
         LocalCredentials.readKeychainItemViaSecurityTool = securityTool
+        LocalCredentials.environment = { [:] }
         for provider in Provider.allCases { LocalCredentials.resetCache(for: provider) }
         defer {
             LocalCredentials.access = originalAccess
             LocalCredentials.readKeychainItem = originalKeychain
             LocalCredentials.readKeychainItemViaSecurityTool = originalTool
+            LocalCredentials.environment = originalEnv
             for provider in Provider.allCases { LocalCredentials.resetCache(for: provider) }
         }
         try await body()
@@ -509,6 +512,45 @@ struct LocalCredentialsAccessTests {
             #expect(json[key]["email"].string == "me@example.com")
             #expect(json[otherKey]["key"].string == "other")
             #expect(json[otherKey]["refresh_token"].string == "other_refresh")
+        }
+    }
+
+    @Test func codexDetectsApiKeyFromEnvironment() async throws {
+        let sandbox = try Sandbox()
+        try await withAccess(sandbox.access) {
+            LocalCredentials.environment = { ["OPENAI_API_KEY": "sk-test-env-key"] }
+            let cred = try await LocalCredentials.credential(for: .codex)
+            guard case let .apiKey(key) = cred else {
+                Issue.record("expected apiKey credential")
+                return
+            }
+            #expect(key == "sk-test-env-key")
+        }
+    }
+
+    @Test func claudeDetectsApiKeyFromEnvironment() async throws {
+        let sandbox = try Sandbox()
+        try await withAccess(sandbox.access) {
+            LocalCredentials.environment = { ["ANTHROPIC_API_KEY": "sk-ant-test-key"] }
+            let cred = try await LocalCredentials.credential(for: .claude)
+            guard case let .apiKey(key) = cred else {
+                Issue.record("expected apiKey credential")
+                return
+            }
+            #expect(key == "sk-ant-test-key")
+        }
+    }
+
+    @Test func grokDetectsApiKeyFromEnvironment() async throws {
+        let sandbox = try Sandbox()
+        try await withAccess(sandbox.access) {
+            LocalCredentials.environment = { ["XAI_API_KEY": "xai-test-key"] }
+            let cred = try await LocalCredentials.credential(for: .grok)
+            guard case let .apiKey(key) = cred else {
+                Issue.record("expected apiKey credential")
+                return
+            }
+            #expect(key == "xai-test-key")
         }
     }
 }

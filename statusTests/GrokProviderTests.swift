@@ -106,13 +106,47 @@ struct GrokProviderTests {
         #expect(snapshot.sections.map(\.title) == ["Weekly", "Extra Usage"])
     }
 
-    @Test func apiKeyDoesNotCallBilling() async throws {
-        let provider = GrokProvider(transport: { url, _ in
-            Issue.record("unexpected request to \(url)")
+    @Test func extraUsageWithSpendShowsFraction() throws {
+        var config = Self.billing()["config"] as! [String: Any]
+        config["onDemandUsage"] = ["val": 500.0]
+        config["onDemandCap"] = ["val": 2500.0]
+        let sections = try GrokProvider.parseBilling(JSON(["config": config]), now: Self.now)
+        let extra = try #require(sections.first { $0.title == "Extra Usage" })
+        #expect(extra.fraction == 0.20)
+        #expect(extra.leading == "\(Format.currency(500)) / \(Format.currency(2500)) cap")
+    }
+
+    @Test func apiKeyValidatesKeyAndParsesLimits() async throws {
+        let provider = GrokProvider(transport: { url, headers in
+            #expect(headers["Authorization"] == "Bearer xai-key")
+            if url == GrokProvider.apiKeyURL {
+                return HTTPResult.stub([
+                    "name": "My Prod Key",
+                    "team_id": "team_123",
+                ], headers: [
+                    "x-ratelimit-limit-requests": "1000",
+                    "x-ratelimit-remaining-requests": "900",
+                ])
+            }
             throw ProviderError.invalidResponse
-        })
+        }, now: { Self.now })
+
         let snapshot = try await provider.fetch(ProviderRequest(credential: .apiKey("xai-key")))
-        #expect(snapshot.sections.isEmpty)
-        #expect(snapshot.note != nil)
+        #expect(snapshot.planName == "xAI API")
+        #expect(snapshot.sections.map { $0.title } == ["Requests"])
+        #expect(snapshot.sections[0].fraction == 0.10)
+    }
+
+    @Test(arguments: [401, 403])
+    func apiKeyUnauthorizedPropagates(status: Int) async {
+        let provider = GrokProvider(transport: { _, _ in
+            HTTPResult.stub(status: status)
+        }, now: { Self.now })
+
+        await #expect {
+            _ = try await provider.fetch(ProviderRequest(credential: .apiKey("xai-key")))
+        } throws: { error in
+            (error as? ProviderError)?.isUnauthorized == true
+        }
     }
 }

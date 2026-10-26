@@ -89,6 +89,15 @@ struct AntigravityProvider: UsageProviding {
             // A parsed summary — even an empty one — is authoritative; the legacy
             // path would fabricate "fully used" from missing quota info.
             snapshot.sections = sections
+            // The summary can omit the Gemini pool entirely (observed on both
+            // hosts for free-tier logins) while the legacy quota still reports
+            // it, so only that missing pool is filled from the legacy call.
+            if !sections.contains(where: { Self.geminiTitles.contains($0.title) }) {
+                let quota = try await call(Self.quotaPath, token: token, userAgent: "antigravity", body: quotaBody)
+                if let gemini = quota.flatMap({ Self.geminiSupplement(in: $0.json, now: now) }) {
+                    snapshot.sections.insert(gemini, at: 0)
+                }
+            }
         } else {
             log.debug("no quota summary; falling back to retrieveUserQuota")
             let quota = try await call(Self.quotaPath, token: token, userAgent: "antigravity", body: quotaBody)
@@ -178,6 +187,26 @@ struct AntigravityProvider: UsageProviding {
             pooled[spec.id].map { section(title: spec.title, remaining: $0["remainingFraction"].double ?? 0,
                                           reset: $0["resetTime"].string, now: now) }
         }
+    }
+
+    static let geminiTitles: Set<String> = ["Session", "Weekly"]
+
+    /// The Gemini pool from a legacy `retrieveUserQuota` body (worst remaining
+    /// fraction across Gemini models), titled by how far away its reset is:
+    /// a window closing within a day is the 5-hour "Session", otherwise
+    /// "Weekly". Used only when the quota summary omits the Gemini group.
+    static func geminiSupplement(in json: JSON, now: Date = Date()) -> UsageSection? {
+        var worst: (remaining: Double, reset: String?)?
+        for bucket in json["buckets"].array {
+            guard let model = bucket["modelId"].string, model.lowercased().contains("gemini"),
+                  let remaining = bucket["remainingFraction"].double else { continue }
+            if let existing = worst, existing.remaining <= remaining { continue }
+            worst = (remaining, bucket["resetTime"].string)
+        }
+        guard let worst else { return nil }
+        let isSession = SessionUsage.resetDate(from: worst.reset, now: now)
+            .map { $0.timeIntervalSince(now) < 24 * 3_600 } ?? false
+        return section(title: isSession ? "Session" : "Weekly", remaining: worst.remaining, reset: worst.reset, now: now)
     }
 
     /// Legacy `retrieveUserQuota` buckets merged into the Gemini ("Session") and

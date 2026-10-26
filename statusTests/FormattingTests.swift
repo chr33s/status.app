@@ -28,4 +28,14 @@ struct FormattingTests {
         let section = SessionUsage.utilizationSection(title: "Session", utilization: 0.5, reset: "9000", now: testNow)
         #expect(section?.trailing == "Resets in 2h 30m")
     }
+
+    @Test(arguments: [("12ms", 0.012), ("30s", 30), ("6m0s", 360), ("1h2m3.5s", 3_723.5)])
+    func goStyleDurationsParse(raw: String, seconds: Double) {
+        #expect(SessionUsage.duration(from: raw) == seconds)
+    }
+
+    @Test(arguments: ["", "abc", "5x", "1h2"])
+    func malformedDurationsAreRejected(raw: String) {
+        #expect(SessionUsage.duration(from: raw) == nil)
+    }
 }

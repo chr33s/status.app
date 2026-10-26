@@ -92,6 +92,10 @@ struct JSON {
         return number.flatMap { $0.isFinite ? $0 : nil }
     }
 
+    var bool: Bool? {
+        value as? Bool
+    }
+
     var string: String? {
         switch value {
         case let v as String: return v

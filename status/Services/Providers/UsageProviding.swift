@@ -10,8 +10,7 @@ enum Credential: Sendable {
     ///   (email / login / plan tier). May equal `accountID` for providers
     ///   where the latter is already human-readable.
     case oauth(accessToken: String, accountID: String?, displayName: String?)
-    /// A local API key found in a CLI's config (e.g. Codex `OPENAI_API_KEY`,
-    /// Grok `XAI_API_KEY`). No subscription limits are available for these.
+    /// A local API key found in a CLI's config or environment (e.g. OpenAI, Claude, xAI).
     case apiKey(String)
 }
 

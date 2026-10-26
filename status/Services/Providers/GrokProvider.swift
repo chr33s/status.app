@@ -23,6 +23,7 @@ struct GrokProvider: UsageProviding {
 
     static let billingURL = URL(string: "https://cli-chat-proxy.grok.com/v1/billing?format=credits")!
     static let settingsURL = URL(string: "https://cli-chat-proxy.grok.com/v1/settings")!
+    static let apiKeyURL = URL(string: "https://api.x.ai/v1/api-key")!
 
     private let transport: Transport
     private let now: @Sendable () -> Date
@@ -36,11 +37,15 @@ struct GrokProvider: UsageProviding {
     }
 
     func fetch(_ request: ProviderRequest) async throws -> UsageSnapshot {
-        guard case let .oauth(token, _, displayName) = request.credential else {
-            log.notice("no OIDC credential (API key only)")
-            return .notice(plan: "Grok CLI",
-                "Grok is using an API key, which has no quota endpoint. Sign in with `grok login` to track subscription usage.")
+        switch request.credential {
+        case let .oauth(token, _, displayName):
+            return try await fetchOAuth(token: token, displayName: displayName)
+        case let .apiKey(key):
+            return try await fetchAPIKey(key: key)
         }
+    }
+
+    private func fetchOAuth(token: String, displayName: String?) async throws -> UsageSnapshot {
         let payload = Self.decodeJWT(token)
         // Catch expired tokens locally so the store refreshes instead of
         // failing the request remotely.
@@ -73,6 +78,29 @@ struct GrokProvider: UsageProviding {
             snapshot.planName = (payload["tier"] as? Int).map { "Grok Tier \($0)" }
                 ?? displayName
                 ?? "Grok CLI"
+        }
+        return snapshot
+    }
+
+    private func fetchAPIKey(key: String) async throws -> UsageSnapshot {
+        let headers = [
+            "Authorization": "Bearer \(key)",
+            "Accept": "application/json",
+        ]
+
+        let result = try await transport(Self.apiKeyURL, headers)
+        if result.status == 401 || result.status == 403 {
+            throw ProviderError.http(status: result.status, body: String(result.text.prefix(280)))
+        }
+
+        var snapshot = UsageSnapshot()
+        snapshot.planName = "xAI API"
+
+        // Inference keys can't read billing (the management API needs its own
+        // key), and this endpoint rarely returns rate-limit headers.
+        snapshot.sections = SessionUsage.openAIRateLimitSections(result, now: now())
+        if snapshot.sections.isEmpty {
+            snapshot.note = "Signed in with xAI API key. xAI doesn't expose credit or limits for inference keys."
         }
         return snapshot
     }
@@ -111,10 +139,25 @@ struct GrokProvider: UsageProviding {
         }
 
         let cap = config["onDemandCap"]["val"].double ?? 0
+        let spend = config["onDemandUsage"]["val"].double
+            ?? config["onDemandSpend"]["val"].double
+            ?? config["extraUsageSpend"]["val"].double
+        let fraction: Double?
+        let leading: String
+        if let spend, cap > 0 {
+            fraction = min(max(spend / cap, 0), 1)
+            leading = "\(Format.currency(spend)) / \(Format.currency(cap)) cap"
+        } else if cap > 0 {
+            fraction = nil
+            leading = String(format: "%.0f cap", cap.rounded())
+        } else {
+            fraction = nil
+            leading = "Disabled"
+        }
         sections.append(UsageSection(
             title: "Extra Usage",
-            fraction: nil,
-            leading: cap > 0 ? String(format: "%.0f cap", cap.rounded()) : "Disabled",
+            fraction: fraction,
+            leading: leading,
             trailing: nil
         ))
         return sections

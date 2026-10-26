@@ -46,28 +46,43 @@ struct ClaudeProvider: UsageProviding {
     }
 
     func fetch(_ request: ProviderRequest) async throws -> UsageSnapshot {
-        guard case let .oauth(token, _, displayName) = request.credential else {
-            log.error("missing OAuth credential")
-            throw ProviderError.missingConfiguration("No Claude Code login found.")
+        let isAPIKey: Bool
+        let authToken: String
+        let displayName: String?
+
+        switch request.credential {
+        case let .oauth(token, _, display):
+            isAPIKey = false
+            authToken = token
+            displayName = display
+        case let .apiKey(key):
+            isAPIKey = true
+            authToken = key
+            displayName = nil
         }
 
-        // CLI fingerprint — the OAuth path is gated on these headers in
-        // addition to the bearer token.
-        let headers = [
-            "Authorization": "Bearer \(token)",
+        var headers = [
             "anthropic-version": "2023-06-01",
-            "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14",
             "user-agent": "claude-cli/2.1.119 (external, cli)",
-            "x-app": "cli",
-            "anthropic-dangerous-direct-browser-access": "true",
             "Content-Type": "application/json",
         ]
-        let body = try JSONSerialization.data(withJSONObject: [
+        var bodyPayload: [String: Any] = [
             "model": probeModel,
             "max_tokens": 1,
-            "system": [["type": "text", "text": probeSystem]],
             "messages": [["role": "user", "content": "ping"]],
-        ])
+        ]
+        if isAPIKey {
+            headers["x-api-key"] = authToken
+        } else {
+            // CLI fingerprint — the OAuth path is gated on these headers in
+            // addition to the bearer token.
+            headers["Authorization"] = "Bearer \(authToken)"
+            headers["anthropic-beta"] = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14"
+            headers["x-app"] = "cli"
+            headers["anthropic-dangerous-direct-browser-access"] = "true"
+            bodyPayload["system"] = [["type": "text", "text": probeSystem]]
+        }
+        let body = try JSONSerialization.data(withJSONObject: bodyPayload)
 
         log.debug("probing \(Self.endpoint.absoluteString, privacy: .public)")
         let result: HTTPResult
@@ -80,7 +95,7 @@ struct ClaudeProvider: UsageProviding {
         log.debug("probe ok status=\(result.status)")
 
         var snapshot = UsageSnapshot()
-        snapshot.planName = displayName ?? "Claude Code"
+        snapshot.planName = displayName ?? (isAPIKey ? "Anthropic API" : "Claude Code")
         snapshot.sections = Self.sections(from: result, now: now())
         // Exhausted subscriptions return 429 with the same quota headers.
         // Keep those meters, but propagate all other HTTP failures.
@@ -90,9 +105,13 @@ struct ClaudeProvider: UsageProviding {
         }
 
         if snapshot.sections.isEmpty {
-            let status = result.header("anthropic-ratelimit-unified-status") ?? "active"
-            log.notice("no rate-limit headers returned (status=\(status, privacy: .public))")
-            snapshot.note = "Signed in via Claude Code (status: \(status)). The API didn't return subscription window limits on this request."
+            if isAPIKey {
+                snapshot.note = "Signed in via Anthropic API key. Rate limit and credit headers weren't returned on this request."
+            } else {
+                let status = result.header("anthropic-ratelimit-unified-status") ?? "active"
+                log.notice("no rate-limit headers returned (status=\(status, privacy: .public))")
+                snapshot.note = "Signed in via Claude Code (status: \(status)). The API didn't return subscription window limits on this request."
+            }
         } else {
             log.info("loaded \(snapshot.sections.count) section(s)")
         }
@@ -100,14 +119,14 @@ struct ClaudeProvider: UsageProviding {
     }
 
     /// Maps the probe's rate-limit headers to Session / Weekly meters, falling
-    /// back to the legacy request limit when no unified headers are present.
+    /// back to the standard request/token rate-limit headers.
     static func sections(from result: HTTPResult, now: Date = Date()) -> [UsageSection] {
         var sections: [UsageSection] = []
 
         // 5-hour session window — `utilization` is a 0-1 fraction.
         if let session = SessionUsage.utilizationSection(
             title: "Session",
-            utilization: number(result, "anthropic-ratelimit-unified-5h-utilization"),
+            utilization: SessionUsage.headerNumber(result, "anthropic-ratelimit-unified-5h-utilization"),
             reset: result.header("anthropic-ratelimit-unified-5h-reset"),
             now: now
         ) {
@@ -117,7 +136,7 @@ struct ClaudeProvider: UsageProviding {
         // 7-day weekly window.
         if let weekly = SessionUsage.utilizationSection(
             title: "Weekly",
-            utilization: number(result, "anthropic-ratelimit-unified-7d-utilization"),
+            utilization: SessionUsage.headerNumber(result, "anthropic-ratelimit-unified-7d-utilization"),
             reset: result.header("anthropic-ratelimit-unified-7d-reset"),
             now: now
         ) {
@@ -125,20 +144,50 @@ struct ClaudeProvider: UsageProviding {
         }
 
         // Fallback: legacy request/token rate-limit headers (API-key callers).
-        if sections.isEmpty,
-           let generic = SessionUsage.limitSection(
-               title: "Rate limit",
-               limit: number(result, "anthropic-ratelimit-requests-limit"),
-               remaining: number(result, "anthropic-ratelimit-requests-remaining"),
-               reset: result.header("anthropic-ratelimit-requests-reset"),
-               now: now
-           ) {
-            sections.append(generic)
+        if sections.isEmpty {
+            if let generic = SessionUsage.limitSection(
+                title: "Rate limit",
+                limit: SessionUsage.headerNumber(result, "anthropic-ratelimit-requests-limit"),
+                remaining: SessionUsage.headerNumber(result, "anthropic-ratelimit-requests-remaining"),
+                reset: result.header("anthropic-ratelimit-requests-reset"),
+                now: now
+            ) {
+                sections.append(generic)
+            }
+            if let tokens = SessionUsage.limitSection(
+                title: "Tokens",
+                limit: SessionUsage.headerNumber(result, "anthropic-ratelimit-tokens-limit")
+                    ?? SessionUsage.headerNumber(result, "anthropic-ratelimit-input-tokens-limit"),
+                remaining: SessionUsage.headerNumber(result, "anthropic-ratelimit-tokens-remaining")
+                    ?? SessionUsage.headerNumber(result, "anthropic-ratelimit-input-tokens-remaining"),
+                reset: result.header("anthropic-ratelimit-tokens-reset")
+                    ?? result.header("anthropic-ratelimit-input-tokens-reset"),
+                now: now
+            ) {
+                sections.append(tokens)
+            }
         }
+        // Extra (overage) usage, always listed when the backend reports it, like
+        // Grok's "Extra Usage": a meter when enabled, "Disabled" when the org
+        // turned it off (`overage-status: rejected`).
+        if let extra = extraUsageSection(from: result, now: now) {
+            sections.append(extra)
+        }
+
         return sections
     }
 
-    private static func number(_ result: HTTPResult, _ name: String) -> Double? {
-        result.header(name).flatMap(Double.init).flatMap { $0.isFinite ? $0 : nil }
+    static func extraUsageSection(from result: HTTPResult, now: Date) -> UsageSection? {
+        if let meter = SessionUsage.utilizationSection(
+            title: "Extra Usage",
+            utilization: SessionUsage.headerNumber(result, "anthropic-ratelimit-unified-overage-utilization"),
+            reset: result.header("anthropic-ratelimit-unified-overage-reset"),
+            now: now
+        ) {
+            return meter
+        }
+        guard let status = result.header("anthropic-ratelimit-unified-overage-status") else { return nil }
+        let leading = status == "rejected" ? "Disabled" : "Enabled"
+        return UsageSection(title: "Extra Usage", fraction: nil, leading: leading, trailing: nil)
     }
 }

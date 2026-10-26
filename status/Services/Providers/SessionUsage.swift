@@ -17,9 +17,27 @@ enum SessionUsage {
                     ? Date(timeIntervalSince1970: epoch)
                     : now.addingTimeInterval(epoch))
         }
+        if let seconds = duration(from: raw) { return now.addingTimeInterval(seconds) }
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.date(from: raw) ?? ISO8601DateFormatter().date(from: raw)
+    }
+
+    /// Parses Go-style durations such as `12ms`, `6m0s` or `1h2m3.5s`
+    /// (OpenAI / xAI `x-ratelimit-reset-*` headers) into seconds.
+    static func duration(from raw: String) -> TimeInterval? {
+        let units: [String: Double] = ["ms": 0.001, "s": 1, "m": 60, "h": 3_600, "d": 86_400]
+        let scanner = Scanner(string: raw)
+        var total = 0.0
+        var matched = false
+        while !scanner.isAtEnd {
+            guard let value = scanner.scanDouble(), value.isFinite,
+                  let unit = scanner.scanCharacters(from: .letters),
+                  let scale = units[unit] else { return nil }
+            total += value * scale
+            matched = true
+        }
+        return matched ? total : nil
     }
 
     /// Builds a meter from a rate-limit "window" object of the shape returned
@@ -62,6 +80,25 @@ enum SessionUsage {
             section.trailing = Format.resetCountdown(to: date, now: now)
         }
         return section
+    }
+
+    /// Parses a numeric response header, rejecting non-finite values.
+    static func headerNumber(_ result: HTTPResult, _ name: String) -> Double? {
+        result.header(name).flatMap(Double.init).flatMap { $0.isFinite ? $0 : nil }
+    }
+
+    /// Requests / Tokens meters from OpenAI-style `x-ratelimit-*` headers
+    /// (shared by the OpenAI and xAI APIs).
+    static func openAIRateLimitSections(_ result: HTTPResult, now: Date = Date()) -> [UsageSection] {
+        [("Requests", "requests"), ("Tokens", "tokens")].compactMap { title, kind in
+            limitSection(
+                title: title,
+                limit: headerNumber(result, "x-ratelimit-limit-\(kind)"),
+                remaining: headerNumber(result, "x-ratelimit-remaining-\(kind)"),
+                reset: result.header("x-ratelimit-reset-\(kind)"),
+                now: now
+            )
+        }
     }
 
     /// Builds a meter from a single `utilization` fraction (0-1) and reset

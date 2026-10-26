@@ -111,13 +111,74 @@ struct CodexProviderTests {
         #expect(snapshot.note != nil)
     }
 
-    @Test func apiKeyDoesNotProbe() async throws {
-        let provider = CodexProvider(transport: { url, _ in
-            Issue.record("unexpected request to \(url)")
-            throw ProviderError.invalidResponse
-        })
+    @Test func apiKeyProbesCompletionAndParsesRateLimits() async throws {
+        let provider = CodexProvider(probe: { url, headers, _ in
+            #expect(url == CodexProvider.probeURL)
+            #expect(headers["Authorization"] == "Bearer key")
+            return .stub(headers: [
+                "x-ratelimit-limit-requests": "500",
+                "x-ratelimit-remaining-requests": "250",
+                "x-ratelimit-reset-requests": "30s",
+                "x-ratelimit-limit-tokens": "10000",
+                "x-ratelimit-remaining-tokens": "8000",
+            ])
+        }, now: { testNow })
+
+        let snapshot = try await provider.fetch(.apiKey)
+        #expect(snapshot.planName == "OpenAI API")
+        #expect(snapshot.sections.map(\.title) == ["Requests", "Tokens"])
+        #expect(snapshot.sections[0].fraction == 0.5)
+        #expect(snapshot.sections[0].trailing != nil)
+        #expect(snapshot.sections[1].fraction == 0.2)
+    }
+
+    @Test func apiKeyWithoutHeadersYieldsNote() async throws {
+        let provider = CodexProvider(probe: { _, _, _ in .stub() }, now: { testNow })
         let snapshot = try await provider.fetch(.apiKey)
         #expect(snapshot.sections.isEmpty)
         #expect(snapshot.note != nil)
+    }
+
+    @Test func apiKeyUnauthorizedPropagates() async {
+        let provider = CodexProvider(probe: { _, _, _ in .stub(status: 401) }, now: { testNow })
+
+        await #expect {
+            _ = try await provider.fetch(.apiKey)
+        } throws: { error in
+            (error as? ProviderError)?.isUnauthorized == true
+        }
+    }
+
+    @Test func emptyCreditsAndSpendControlShowStatus() {
+        // Real `wham/usage` shape for a plan with nothing purchased.
+        let json = JSON([
+            "credits": ["has_credits": false, "unlimited": false, "overage_limit_reached": false, "balance": "0"],
+            "spend_control": ["reached": false, "individual_limit": NSNull()],
+        ])
+        let sections = CodexProvider.extraUsageSections(in: json)
+        #expect(sections.map(\.title) == ["Credits", "Spend Limit"])
+        #expect(sections.map(\.leading) == ["No credits", "Not set"])
+    }
+
+    @Test func missingExtraUsageObjectsAddNothing() {
+        #expect(CodexProvider.extraUsageSections(in: JSON(["plan_type": "free"])).isEmpty)
+    }
+
+    @Test func creditBalanceAndSpendLimitAreShown() {
+        let json = JSON([
+            "credits": ["has_credits": true, "unlimited": false, "overage_limit_reached": true, "balance": "42.5"],
+            "spend_control": ["reached": true, "individual_limit": 100],
+        ])
+        let sections = CodexProvider.extraUsageSections(in: json)
+        #expect(sections.map(\.title) == ["Credits", "Spend Limit"])
+        #expect(sections[0].leading == "42.5 credits")
+        #expect(sections[0].trailing == "Limit reached")
+        #expect(sections[1].leading == "100 limit")
+        #expect(sections[1].fraction == 1)
+    }
+
+    @Test func unlimitedCreditsAreLabelled() {
+        let json = JSON(["credits": ["unlimited": true, "balance": "0"]])
+        #expect(CodexProvider.extraUsageSections(in: json).first?.leading == "Unlimited")
     }
 }
