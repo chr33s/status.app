@@ -2,8 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>StatusAppGroupIdentifier</key>
-	<string>$(TeamIdentifierPrefix)dev.chr33s.status</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -15,5 +13,11 @@
 			</array>
 		</dict>
 	</array>
+	<key>LSMultipleInstancesProhibited</key>
+	<false/>
+	<key>LSUIElement</key>
+	<true/>
+	<key>StatusAppGroupIdentifier</key>
+	<string>$(TeamIdentifierPrefix)dev.chr33s.status</string>
 </dict>
 </plist>
