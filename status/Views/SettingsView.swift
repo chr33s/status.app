@@ -64,36 +64,49 @@ struct ProviderStatusCard: View {
     let state: LoadState
     @Environment(UsageStore.self) private var store
 
+    private var isEnabled: Bool {
+        store.isEnabled(provider)
+    }
+
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 10) {
                     Image(systemName: provider.systemImage)
                         .font(.title3)
-                        .foregroundStyle(provider.accentColor)
+                        .foregroundStyle(isEnabled ? provider.accentColor : .secondary)
                         .frame(width: 22)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(provider.fullName).font(.headline)
                         statusLine
                     }
                     Spacer(minLength: 0)
+                    Toggle("Enable \(provider.fullName)", isOn: Binding(
+                        get: { isEnabled },
+                        set: { store.setEnabled($0, for: provider) }
+                    ))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
                 }
 
-                switch state {
-                case .authorizationRequired(let resource, let lost):
-                    FolderAccessPrompt(resource: resource, lost: lost, compact: true)
-                case .notConfigured, .needsReauth:
-                    ReauthCommandPrompt(provider: provider, compact: true)
-                default:
-                    HStack {
-                        Spacer(minLength: 0)
-                        Button("Re-check") { store.reload(provider) }
-                            .controlSize(.small)
+                if isEnabled {
+                    switch state {
+                    case .authorizationRequired(let resource, let lost):
+                        FolderAccessPrompt(resource: resource, lost: lost, compact: true)
+                    case .notConfigured, .needsReauth:
+                        ReauthCommandPrompt(provider: provider, compact: true)
+                    default:
+                        HStack {
+                            Spacer(minLength: 0)
+                            Button("Re-check") { store.reload(provider) }
+                                .controlSize(.small)
+                        }
                     }
-                }
 
-                if let resource = provider.externalResource, access.isAuthorized(resource) {
-                    FolderGrantRow(resource: resource)
+                    if let resource = provider.externalResource, access.isAuthorized(resource) {
+                        FolderGrantRow(resource: resource)
+                    }
                 }
             }
             .padding(6)
@@ -104,26 +117,30 @@ struct ProviderStatusCard: View {
 
     @ViewBuilder
     private var statusLine: some View {
-        switch state {
-        case .loaded:
-            Label("Connected via \(provider.cliName)", systemImage: "checkmark.circle.fill")
-                .font(.caption).foregroundStyle(.green)
-        case .loading:
-            Text("Checking \(provider.cliName)…").font(.caption).foregroundStyle(.secondary)
-        case .authorizationRequired(let resource, let lost):
-            Label(lost ? "Access needs to be granted again" : "Allow Status to access your \(resource.folderName) folder",
-                  systemImage: "folder.badge.questionmark")
-                .font(.caption).foregroundStyle(.orange)
-        case .notConfigured:
-            Text("Not signed in. \(provider.cliSignInHint)")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        case .needsReauth:
-            Label("Session expired — sign in again", systemImage: "exclamationmark.triangle.fill")
-                .font(.caption).foregroundStyle(.orange)
-        case .failed(let message, _):
-            Text(message).font(.caption).foregroundStyle(.secondary)
-                .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+        if !isEnabled {
+            Text("Disabled").font(.caption).foregroundStyle(.secondary)
+        } else {
+            switch state {
+            case .loaded:
+                Label("Connected via \(provider.cliName)", systemImage: "checkmark.circle.fill")
+                    .font(.caption).foregroundStyle(.green)
+            case .loading:
+                Text("Checking \(provider.cliName)…").font(.caption).foregroundStyle(.secondary)
+            case .authorizationRequired(let resource, let lost):
+                Label(lost ? "Access needs to be granted again" : "Allow Status to access your \(resource.folderName) folder",
+                      systemImage: "folder.badge.questionmark")
+                    .font(.caption).foregroundStyle(.orange)
+            case .notConfigured:
+                Text("Not signed in. \(provider.cliSignInHint)")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .needsReauth:
+                Label("Session expired — sign in again", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+            case .failed(let message, _):
+                Text(message).font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }
@@ -205,7 +222,7 @@ struct TelemetrySettingsView: View {
                 }
 
                 // Antigravity doesn't export OpenTelemetry.
-                ForEach(Provider.allCases.filter { $0 != .antigravity }) { provider in
+                ForEach(store.enabledProviders.filter { $0 != .antigravity }) { provider in
                     TelemetryProviderRow(provider: provider, endpoint: telemetry.endpoint)
                 }
             }

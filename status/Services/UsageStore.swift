@@ -16,7 +16,7 @@ final class UsageStore {
     private(set) var isRefreshing = false
     var selected: Provider = .codex
 
-    @ObservationIgnored private let settings = AppSettings.shared
+    @ObservationIgnored private let settings: AppSettings
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var didStart = false
     @ObservationIgnored private var didAutoSelect = false
@@ -25,22 +25,57 @@ final class UsageStore {
     @ObservationIgnored private let fetchUsage: (Provider, Credential) async throws -> UsageSnapshot
 
     init(
+        settings: AppSettings = .shared,
         loadCredential: @escaping (Provider) async throws -> Credential? = { try await LocalCredentials.credential(for: $0) },
         fetchUsage: @escaping (Provider, Credential) async throws -> UsageSnapshot = {
             try await ProviderFactory.make($0).fetch(ProviderRequest(credential: $1))
         }
     ) {
+        self.settings = settings
         self.loadCredential = loadCredential
         self.fetchUsage = fetchUsage
         // Seed as loading without touching the Keychain/disk on the main thread;
         // the first refresh resolves real state asynchronously.
-        for provider in Provider.allCases {
+        for provider in Provider.allCases where settings.isEnabled(provider) {
             states[provider] = .loading
+        }
+        if !settings.isEnabled(selected), let first = settings.enabledProviders.first {
+            selected = first
         }
     }
 
     func state(for provider: Provider) -> LoadState {
         states[provider] ?? .notConfigured
+    }
+
+    // MARK: Enabled providers
+
+    var enabledProviders: [Provider] {
+        settings.enabledProviders
+    }
+
+    func isEnabled(_ provider: Provider) -> Bool {
+        settings.isEnabled(provider)
+    }
+
+    func setEnabled(_ enabled: Bool, for provider: Provider) {
+        guard settings.isEnabled(provider) != enabled else { return }
+        settings.setEnabled(enabled, for: provider)
+        if enabled {
+            if !enabledProviders.contains(selected) || !state(for: selected).isConfigured {
+                selected = provider
+            }
+            reload(provider)
+        } else {
+            refreshTasks[provider]?.cancel()
+            refreshTasks[provider] = nil
+            if selected == provider {
+                selected = enabledProviders.first(where: { state(for: $0).isConfigured })
+                    ?? enabledProviders.first
+                    ?? provider
+            }
+            publishToWidgets()
+        }
     }
 
     // MARK: Refresh
@@ -51,7 +86,7 @@ final class UsageStore {
         defer { isRefreshing = false }
 
         await withTaskGroup(of: Void.self) { group in
-            for provider in Provider.allCases {
+            for provider in enabledProviders {
                 group.addTask { await self.refresh(provider) }
             }
         }
@@ -65,7 +100,7 @@ final class UsageStore {
     /// show the Keychain consent dialog), so it renders whatever the app last
     /// published.
     private func publishToWidgets() {
-        let providers = Provider.allCases.compactMap { provider -> SharedProviderUsage? in
+        let providers = enabledProviders.compactMap { provider -> SharedProviderUsage? in
             let state = state(for: provider)
             guard state.isConfigured else { return nil }
             return SharedProviderUsage(
@@ -81,15 +116,19 @@ final class UsageStore {
     /// The first time any provider is signed in, switch to it if the current
     /// selection isn't configured.
     private func autoSelectFirstConfigured() {
+        if !isEnabled(selected), let firstEnabled = enabledProviders.first {
+            selected = firstEnabled
+        }
         guard !didAutoSelect,
-              let firstConfigured = Provider.allCases.first(where: { state(for: $0).isConfigured }) else { return }
+              let firstConfigured = enabledProviders.first(where: { state(for: $0).isConfigured }) else { return }
         didAutoSelect = true
-        if !state(for: selected).isConfigured {
+        if !isEnabled(selected) || !state(for: selected).isConfigured {
             selected = firstConfigured
         }
     }
 
     func refresh(_ provider: Provider, resetCache: Bool = false) async {
+        guard isEnabled(provider) else { return }
         // Timer refreshes join an existing request. A user re-check waits for
         // it to finish, then reads the credentials again. OAuth exchanges for
         // one provider must never overlap (refresh tokens can be single-use).
@@ -97,6 +136,7 @@ final class UsageStore {
             await task.value
             if !resetCache { return }
         }
+        guard isEnabled(provider) else { return }
         let task = Task {
             if resetCache { LocalCredentials.resetCache(for: provider) }
             await performRefresh(provider)
@@ -190,6 +230,6 @@ final class UsageStore {
 
     /// Peak meter fill across configured providers, for the optional badge.
     var peakFraction: Double? {
-        states.values.compactMap { $0.snapshot?.peakFraction }.max()
+        enabledProviders.compactMap { states[$0]?.snapshot?.peakFraction }.max()
     }
 }

@@ -7,7 +7,7 @@ struct ProviderTabBar: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(Provider.allCases) { provider in
+            ForEach(store.enabledProviders) { provider in
                 tab(provider)
             }
         }

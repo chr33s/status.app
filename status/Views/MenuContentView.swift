@@ -25,21 +25,34 @@ struct MenuContentView: View {
 
     private var mainScreen: some View {
         VStack(spacing: 0) {
-            ProviderTabBar()
+            if store.enabledProviders.isEmpty {
+                VStack(spacing: 8) {
+                    Text("No services enabled")
+                        .font(.headline)
+                    Text("Enable at least one service in Settings to track usage.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(24)
+            } else {
+                ProviderTabBar()
 
-            Divider()
+                Divider()
 
-            ScrollView {
-                ProviderDetailView(
-                    provider: store.selected,
-                    state: store.state(for: store.selected)
-                )
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { detailHeight = $0 }
+                ScrollView {
+                    ProviderDetailView(
+                        provider: store.selected,
+                        state: store.state(for: store.selected)
+                    )
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { detailHeight = $0 }
+                }
+                .frame(height: min(detailHeight, Self.maxDetailHeight))
+
+                Divider()
+                actionMenu
             }
-            .frame(height: min(detailHeight, Self.maxDetailHeight))
-
-            Divider()
-            actionMenu
             Divider()
             footer
         }
