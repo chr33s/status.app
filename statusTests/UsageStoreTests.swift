@@ -40,6 +40,43 @@ struct UsageStoreTests {
         #expect(store.state(for: .grok).snapshot?.note == "read 2")
     }
 
+    @Test func refreshAllWithResetCacheWaitsForInFlightRefreshAndRereadsCredentials() async {
+        let settings = makeIsolatedSettings()
+        for provider in Provider.allCases where provider != .antigravity {
+            settings.setEnabled(false, for: provider)
+        }
+        var currentToken = "acct1"
+        var release: CheckedContinuation<Void, Never>?
+        let store = UsageStore(
+            settings: settings,
+            loadCredential: { _ in .oauth(accessToken: currentToken, accountID: nil, displayName: nil) },
+            fetchUsage: { _, credential in
+                if case let .oauth(token, _, _) = credential, token == "acct1" {
+                    await withCheckedContinuation { release = $0 }
+                }
+                if case let .oauth(token, _, _) = credential {
+                    return .notice(plan: token, token)
+                }
+                return .notice(plan: nil, "")
+            }
+        )
+
+        let autoRefresh = Task { await store.refreshAll() }
+        while release == nil { await Task.yield() }
+
+        // User switches account and triggers a manual Refresh while auto-refresh is in flight.
+        currentToken = "acct2"
+        let manualRefresh = Task { await store.refreshAll(resetCache: true) }
+        for _ in 0..<10 { await Task.yield() }
+
+        release?.resume()
+        await autoRefresh.value
+        await manualRefresh.value
+
+        #expect(store.state(for: .antigravity).snapshot?.planName == "acct2")
+        #expect(!store.isRefreshing)
+    }
+
     @Test func networkFailureRetainsLastGoodSnapshot() async {
         var shouldFail = false
         let store = UsageStore(

@@ -332,7 +332,7 @@ struct GeneralSettingsView: View {
             }
 
             Section {
-                Button("Refresh now") { Task { await store.refreshAll() } }
+                Button("Refresh now") { Task { await store.refreshAll(resetCache: true) } }
                 if let last = store.lastRefresh {
                     Text(Format.updated(last))
                         .font(.caption)

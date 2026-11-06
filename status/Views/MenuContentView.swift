@@ -89,7 +89,7 @@ struct MenuContentView: View {
     private var actionMenu: some View {
         VStack(spacing: 0) {
             MenuRow(title: "Refresh", systemImage: "arrow.clockwise") {
-                Task { await store.refreshAll() }
+                Task { await store.refreshAll(resetCache: true) }
             }
             MenuRow(title: "Usage", systemImage: "chart.bar.doc.horizontal") {
                 openURL(store.selected.dashboardURL)

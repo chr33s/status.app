@@ -148,10 +148,8 @@ enum LocalCredentials {
     /// Exchanges the refresh token for a new access token and writes it back to
     /// the CLI's store. Returns nil when there's no refresh token to use.
     ///
-    /// Tries the cached Keychain copy first: the fresh Keychain read is what
-    /// can raise a permission dialog, so it's reserved for the case where the
-    /// cached refresh token no longer works rather than paid on every expired
-    /// access token.
+    /// Drops any cached Keychain copy first so a CLI-rotated token or account
+    /// switch is picked up before spending a refresh exchange.
     ///
     /// Claude is never refreshed here — its refresh token is single-use and
     /// owned by the CLI (see the type doc). Codex and Grok re-read their store
@@ -180,18 +178,22 @@ enum LocalCredentials {
             if loaded?.source == .codexKeychain { return nil }
             return await refreshFromStore(provider)
         case .antigravity:
-            // Google refresh tokens are reusable, so exchanging is safe; try
-            // the cached Keychain copy first because the fresh read is what
-            // can raise a permission dialog.
-            if let credential = await refreshFromStore(provider) { return credential }
-            let hadCache = keychainLock.withLock {
-                let had = cachedAntigravityKeychain != nil
-                cachedAntigravityKeychain = nil
-                refreshedAntigravity = nil
-                return had
+            // Drop the cached Keychain copy and any in-memory refreshed token
+            // first so a token rotation, logout, or account switch in
+            // Antigravity is picked up instead of refreshing the old login.
+            let cachedAccess = keychainLock.withLock { () -> String? in
+                defer {
+                    cachedAntigravityKeychain = nil
+                    refreshedAntigravity = nil
+                }
+                return cachedAntigravityKeychain.flatMap(antigravityAccessToken(_:))
             }
-            // Without a cache the attempt above already read the store fresh.
-            guard hadCache else { return nil }
+            if let loaded = loadAntigravity(),
+               !loaded.access.isEmpty,
+               loaded.access != failedAccess,
+               loaded.access != cachedAccess {
+                return .oauth(accessToken: loaded.access, accountID: loaded.accountID, displayName: loaded.displayName)
+            }
             return await refreshFromStore(provider)
         case .copilot:
             // No refresh token to exchange, but `copilot login` / `gh auth
@@ -437,12 +439,18 @@ enum LocalCredentials {
     /// refreshed access token lives only in `refreshedAntigravity`.
     private static var refreshedAntigravity: (refresh: String, access: String, expiry: Date)?
 
+    private static func antigravityAccessToken(_ raw: [String: Any]) -> String? {
+        let root = JSON(raw)
+        let token = root["token"].value == nil ? root : root["token"]
+        return token["access_token"].string ?? token["accessToken"].string
+    }
+
     private static func loadAntigravity() -> Loaded? {
         guard let raw = antigravityKeychainJSON() else { return nil }
         let root = JSON(raw)
         let token = root["token"].value == nil ? root : root["token"]
         let refresh = token["refresh_token"].string ?? token["refreshToken"].string
-        var access = token["access_token"].string ?? token["accessToken"].string
+        var access = antigravityAccessToken(raw)
         let refreshed = keychainLock.withLock { refreshedAntigravity }
         if let refreshed, refreshed.refresh == refresh, refreshed.expiry > Date() {
             access = refreshed.access

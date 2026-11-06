@@ -228,7 +228,7 @@ struct LocalCredentialsAccessTests {
             await #expect(throws: SecurityScopedAccessError.notAuthorized(.codexData)) {
                 _ = try await LocalCredentials.credential(for: .codex)
             }
-            // Granted but empty: genuinely not signed in.
+            // Granted but empty: genuinely not signed in.\n
             try sandbox.access.authorize(.codexData, url: try sandbox.folder(".codex"))
             #expect(try await LocalCredentials.credential(for: .codex) == nil)
         }
@@ -399,6 +399,73 @@ struct LocalCredentialsAccessTests {
             // The same stale token again is not worth retrying.
             let unchanged = Credential.oauth(accessToken: "gho_new", accountID: "octocat", displayName: "octocat")
             #expect(await LocalCredentials.forceRefresh(.copilot, after: unchanged) == nil)
+        }
+    }
+
+    private func antigravityKeychainItem(access: String, refresh: String) throws -> LocalCredentials.KeychainItem {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "token": ["access_token": access, "refresh_token": refresh],
+        ])
+        return LocalCredentials.KeychainItem(data: data, account: "antigravity")
+    }
+
+    @Test func antigravityResetCacheAndForceRefreshPickUpSwitchedAccount() async throws {
+        let sandbox = try Sandbox()
+        var currentItem: LocalCredentials.KeychainItem? = try antigravityKeychainItem(access: "acct1_access", refresh: "acct1_refresh")
+        let originalRequest = LocalCredentials.refreshRequest
+        defer { LocalCredentials.refreshRequest = originalRequest }
+
+        try await withAccess(sandbox.access) {
+            LocalCredentials.readKeychainItem = { service, account in
+                guard service == "gemini", account == "antigravity" else { return nil }
+                return currentItem
+            }
+
+            // Initial load caches Account 1's Keychain entry.
+            let first = try await LocalCredentials.credential(for: .antigravity)
+            guard case let .oauth(firstToken, _, _) = first else {
+                Issue.record("expected OAuth credential")
+                return
+            }
+            #expect(firstToken == "acct1_access")
+
+            // Simulate an in-memory token refresh for Account 1.
+            LocalCredentials.refreshRequest = { _, _, body in
+                #expect(String(data: body, encoding: .utf8)?.contains("refresh_token=acct1_refresh") == true)
+                return .stub(["access_token": "acct1_refreshed", "expires_in": 3600])
+            }
+            let refreshed1 = await LocalCredentials.forceRefresh(.antigravity, after: first)
+            guard case let .oauth(refreshed1Token, _, _) = refreshed1 else {
+                Issue.record("expected refreshed OAuth credential")
+                return
+            }
+            #expect(refreshed1Token == "acct1_refreshed")
+
+            // User logs out and signs into Account 2 in Antigravity.
+            currentItem = try antigravityKeychainItem(access: "acct2_access", refresh: "acct2_refresh")
+
+            // Resetting the cache (manual Refresh) drops both cached Keychain JSON and refreshedAntigravity.
+            LocalCredentials.resetCache(for: .antigravity)
+            let afterReset = try await LocalCredentials.credential(for: .antigravity)
+            guard case let .oauth(afterResetToken, _, _) = afterReset else {
+                Issue.record("expected Account 2 OAuth credential")
+                return
+            }
+            #expect(afterResetToken == "acct2_access")
+
+            // Likewise, if Account 2 switches to Account 3 before a 401 triggers forceRefresh,
+            // forceRefresh re-reads the Keychain instead of exchanging Account 2's cached refresh token.
+            currentItem = try antigravityKeychainItem(access: "acct3_access", refresh: "acct3_refresh")
+            LocalCredentials.refreshRequest = { _, _, _ in
+                Issue.record("must not exchange old refresh token when Keychain holds a new account token")
+                return .stub([:])
+            }
+            let afterForceRefresh = await LocalCredentials.forceRefresh(.antigravity, after: afterReset)
+            guard case let .oauth(afterForceToken, _, _) = afterForceRefresh else {
+                Issue.record("expected Account 3 OAuth credential")
+                return
+            }
+            #expect(afterForceToken == "acct3_access")
         }
     }
 

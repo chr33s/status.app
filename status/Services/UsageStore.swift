@@ -20,6 +20,7 @@ final class UsageStore {
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var didStart = false
     @ObservationIgnored private var didAutoSelect = false
+    @ObservationIgnored private var activeRefreshCount = 0
     @ObservationIgnored private var refreshTasks: [Provider: Task<Void, Never>] = [:]
     @ObservationIgnored private let loadCredential: (Provider) async throws -> Credential?
     @ObservationIgnored private let fetchUsage: (Provider, Credential) async throws -> UsageSnapshot
@@ -80,14 +81,18 @@ final class UsageStore {
 
     // MARK: Refresh
 
-    func refreshAll() async {
-        guard !isRefreshing else { return }
+    func refreshAll(resetCache: Bool = false) async {
+        guard !isRefreshing || resetCache else { return }
+        activeRefreshCount += 1
         isRefreshing = true
-        defer { isRefreshing = false }
+        defer {
+            activeRefreshCount -= 1
+            isRefreshing = activeRefreshCount > 0
+        }
 
         await withTaskGroup(of: Void.self) { group in
             for provider in enabledProviders {
-                group.addTask { await self.refresh(provider) }
+                group.addTask { await self.refresh(provider, resetCache: resetCache) }
             }
         }
         lastRefresh = Date()
